@@ -1,0 +1,148 @@
+{
+  "project_name": "VoiceBiz",
+  "description": "An AI business assistant for Indonesian micro-business owners and social-commerce sellers, featuring a voice-first natural language interface for tracking sales, expenses, and inventory.",
+  "theme_strategy": {
+    "mode": "light",
+    "justification": "Light mode aligns with the 'Organic & Earthy' (Archetype 1) aesthetic, creating an approachable, trustworthy, and non-intimidating environment suitable for warung owners and social sellers. It ensures high readability for financial numbers outdoors."
+  },
+  "typography": {
+    "strategy": "Soft Utility",
+    "fonts": {
+      "headings": {
+        "family": "Manrope",
+        "description": "A humanist sans-serif that feels friendly yet geometric and modern. Excellent for numbers and clean headings."
+      },
+      "body": {
+        "family": "DM Sans",
+        "description": "Clean, highly readable sans-serif that balances the geometric nature of the headings."
+      }
+    },
+    "hierarchy": {
+      "h1": "text-4xl tracking-tight font-extrabold text-gray-900",
+      "h2": "text-2xl tracking-tight font-bold text-gray-800",
+      "h3": "text-xl font-semibold text-gray-800",
+      "h4": "text-lg font-medium text-gray-700",
+      "body": "text-base leading-relaxed text-gray-600",
+      "small_label": "text-xs uppercase tracking-[0.15em] font-bold text-gray-500",
+      "currency_large": "text-3xl font-extrabold tracking-tighter text-primary"
+    }
+  },
+  "colors": {
+    "archetype": "Organic & Earthy",
+    "palette": {
+      "background": "#FDFBF7",
+      "surface": "#FFFFFF",
+      "primary": "#1B4D3E",
+      "primary_hover": "#13382D",
+      "primary_light": "#E8F0EC",
+      "accent_terracotta": "#E05A47",
+      "accent_terracotta_light": "#FCEEEB",
+      "accent_ochre": "#DDA74F",
+      "text_main": "#1A1C18",
+      "text_muted": "#6C7064",
+      "border": "#EBE8E0",
+      "success": "#2E7D32",
+      "danger": "#C62828"
+    },
+    "usage_rules": {
+      "text_contrast": "Always ensure text meets APCA contrast standards. Use text_main on background and surface.",
+      "cta": "Use primary (#1B4D3E) for main buttons. Use accent_terracotta (#E05A47) for warning or critical actions.",
+      "cards": "Surface is pure white, background is warm sand (#FDFBF7) to create a subtle depth."
+    }
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "card": "shadow-[0_4px_20px_-4px_rgba(27,77,62,0.06)]",
+      "floating": "shadow-[0_12px_40px_-8px_rgba(27,77,62,0.12)]"
+    },
+    "borders": {
+      "subtle": "border border-[#EBE8E0]",
+      "radius_card": "rounded-2xl",
+      "radius_button": "rounded-full"
+    },
+    "glassmorphism": "backdrop-blur-xl bg-white/80 border-b border-white/40 shadow-sm"
+  },
+  "layouts": {
+    "responsive": {
+      "breakpoint": "mobile-first",
+      "container": "max-w-md mx-auto w-full min-h-screen relative shadow-2xl bg-[#FDFBF7]",
+      "desktop_behavior": "On desktop, the app should act as a mobile-sized container centered on the screen to preserve the mobile-first voice UX.",
+      "spacing": "Use generous padding. p-6 for main container edges, gap-4 for dense widgets, gap-8 between major sections.",
+      "overflow_guard": "overflow-x-hidden w-full",
+      "tap_targets": "min-h-[48px] min-w-[48px] for all interactive elements"
+    },
+    "bento_grid": {
+      "dashboard_metrics": "grid grid-cols-2 gap-4. Primary metric (Total Sales) spans 2 cols (col-span-2). Secondary metrics (Expenses, Profit) span 1 col each.",
+      "card_internal": "flex flex-col p-5 gap-2 items-start justify-between h-full w-full bg-white rounded-2xl border border-[#EBE8E0]"
+    }
+  },
+  "motion": {
+    "voice_mic": {
+      "idle": "Scale 1, solid background, gentle float hover.",
+      "listening": "Pulse animation with multiple concentric rings expanding and fading out. Mic icon bounces slightly.",
+      "processing": "Spinning border or morphing shape to indicate AI thinking."
+    },
+    "page_transitions": "Slide up and fade in for new content (`translate-y-4 opacity-0` to `translate-y-0 opacity-100` with ease-out duration 0.3s).",
+    "card_feedback": "On tap, slight scale down (`scale-95`) and release."
+  },
+  "key_components": {
+    "voice_hero_fab": {
+      "description": "Massive, floating action button for the Voice AI, anchored to the bottom center.",
+      "styles": "fixed bottom-8 left-1/2 -translate-x-1/2 w-20 h-20 rounded-full bg-primary text-white shadow-[0_8px_32px_rgba(27,77,62,0.3)] flex items-center justify-center z-50",
+      "icon": "Microphone icon (Phosphor icons or Lucide), sized w-8 h-8."
+    },
+    "ai_confirmation_card": {
+      "description": "A bottom sheet or modal that slides up after the user speaks, showing the extracted data before saving.",
+      "styles": "bg-white rounded-t-3xl p-6 border-t border-[#EBE8E0] shadow-[0_-8px_30px_rgba(0,0,0,0.05)]",
+      "elements": "Includes a natural language summary (e.g., 'Piutang baru terdeteksi'), the structured data (Pak Budi, Rp 150.000), and two large buttons: [Simpan] (Primary) and [Edit] (Secondary/Outline)."
+    },
+    "business_brief_dashboard": {
+      "description": "Today's summary dashboard.",
+      "elements": "Greeting header, large hero metric for Today's Revenue, smaller cards for Expenses and Profit. A section for 'Rekomendasi AI' (e.g., Low stock alerts)."
+    },
+    "ai_insight_card": {
+      "description": "Actionable recommendations generated by the AI.",
+      "styles": "bg-accent_terracotta_light border border-accent_terracotta/20 rounded-2xl p-4 flex gap-3 items-start",
+      "text": "text-sm text-accent_terracotta font-medium"
+    }
+  },
+  "icons": {
+    "library": "lucide-react",
+    "instructions": "Use Lucide React for all icons. Ensure stroke width is 2 or 2.5 for better visibility. Scale appropriately with text."
+  },
+  "images": {
+    "hero_mock_data_faces": [
+      {
+        "url": "https://images.pexels.com/photos/36330752/pexels-photo-36330752.jpeg",
+        "description": "Friendly shopkeeper in tea store, use for customer avatar 'Pak Budi'."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1655462502318-a5ff79542ce7",
+        "description": "Person sitting at table, use for user profile picture."
+      }
+    ],
+    "empty_state_graphics": [
+      {
+        "url": "https://images.pexels.com/photos/33633753/pexels-photo-33633753.jpeg",
+        "description": "Warung scene. Can be used as a subtle background header image or onboarding hero image with a dark gradient overlay."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "CRITICAL: The design must be extremely mobile-first. If viewed on desktop, render the app as a centered mobile-sized container (max-w-md) to preserve the intended UX.",
+    "CRITICAL: Do NOT use standard tables for the 'Business Memory'. Use stacked list cards with big typography to make it legible on mobile.",
+    "Implement the 'Tap to Talk' button as the most prominent element on the screen, floating at the bottom.",
+    "Mock the AI functionality: when the user clicks the mic, simulate a listening state for 2 seconds, then show the AI Confirmation Card with a hardcoded Indonesian text example.",
+    "Use Shadcn UI for standard components (buttons, inputs) but heavily customize them to match the 'Organic & Earthy' palette and rounded-2xl border radius.",
+    "Add 'data-testid' attributes to all interactive elements for testing.",
+    "The UI must be entirely in Bahasa Indonesia as requested."
+  ],
+  "universal_guidelines_for_main_agent": [
+    "Do not converge toward generic outputs. Use the defined warm background and generous padding.",
+    "Avoid simplistic gradients. Use solid colors with crisp, subtle borders.",
+    "Create depth with layered z-index hierarchy and the provided shadow utilities.",
+    "Do not apply `transition: all` globally. Use specific transitions.",
+    "Do not center-align the entire app text. Left-align text for readability, center-align the main mic button.",
+    "Never use placeholder URLs for images. Use the provided image URLs."
+  ]
+}
