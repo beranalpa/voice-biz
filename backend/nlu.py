@@ -85,7 +85,7 @@ async def parse_receipt(image_b64: str) -> dict:
     chat = _chat(
         "Kamu membaca foto nota/struk belanja pemilik warung Indonesia (tulisan tangan atau cetak).\n"
         "Ekstrak pengeluaran dari gambar. Balas HANYA JSON:\n"
-        '{"title":"nama toko atau ringkasan belanja","items":[{"name":"beras","qty":2,"unit_price":65000,'
+        '{"title":"nama toko atau ringkasan belanja","items":[{"name":"beras","qty":2,"unit":"kg","unit_price":65000,'
         '"subtotal":130000}],"total":195000,"category":"bahan baku"|"operasional"|"lainnya",'
         '"note":"catatan singkat","confidence":0.0-1.0}\n'
         "Semua nominal dalam Rupiah bulat tanpa titik. Kalau total tidak terbaca, jumlahkan subtotal item. "

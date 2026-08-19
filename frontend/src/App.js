@@ -39,6 +39,7 @@ export default function App() {
         items: (form.items || []).map((i) => ({
           name: i.name,
           qty: Number(i.qty || 1),
+          unit: i.unit ?? null,
           unit_price: i.unit_price ?? null,
           subtotal: i.subtotal ?? null,
         })),
@@ -47,6 +48,7 @@ export default function App() {
         category: form.category || null,
         note: form.note || form.raw_text || null,
         raw_text: form.raw_text || null,
+        add_to_inventory: !!form.add_to_inventory,
       });
       toast.success(res.message || "Tersimpan");
       setDraft(null);

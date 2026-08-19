@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { RefreshCw, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Pause, RefreshCw, Sparkles, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import { StatCards } from "../components/StatCards";
 import { TargetCard } from "../components/TargetCard";
@@ -8,7 +8,7 @@ import { HistoryFeed } from "../components/HistoryFeed";
 import { TrendChart } from "../components/TrendChart";
 import { InsightList } from "../components/InsightList";
 import { TalkPanel } from "../components/TalkPanel";
-import { getBrief, getDashboard } from "../lib/api";
+import { briefAudioUrl, getBrief, getDashboard } from "../lib/api";
 
 const fmtTime = (iso) =>
   new Date(iso).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
@@ -19,9 +19,13 @@ export default function Home({ refreshKey, onDraft, onChanged }) {
   const [data, setData] = useState(null);
   const [brief, setBrief] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [loadingAudio, setLoadingAudio] = useState(false);
+  const audioRef = useRef(null);
 
   useEffect(() => {
     getDashboard().then(setData).catch(() => {});
+    return () => audioRef.current?.pause();
   }, [refreshKey]);
 
   const loadBrief = async () => {
@@ -33,6 +37,39 @@ export default function Home({ refreshKey, onDraft, onChanged }) {
       toast.error("Gagal membuat briefing. Coba lagi.");
     } finally {
       setLoadingBrief(false);
+    }
+  };
+
+  const speak = async () => {
+    if (speaking) {
+      audioRef.current?.pause();
+      setSpeaking(false);
+      return;
+    }
+    let text = brief;
+    if (!text) {
+      await loadBrief();
+      const r = await getBrief().catch(() => null);
+      text = r?.brief;
+      if (text) setBrief(text);
+    }
+    if (!text) return;
+    setLoadingAudio(true);
+    const audio = new Audio(briefAudioUrl(text));
+    audioRef.current = audio;
+    audio.onended = () => setSpeaking(false);
+    audio.onerror = () => {
+      setSpeaking(false);
+      setLoadingAudio(false);
+      toast.error("Gagal memutar suara briefing");
+    };
+    try {
+      await audio.play();
+      setSpeaking(true);
+    } catch {
+      toast.error("Browser memblokir pemutaran otomatis, coba tap sekali lagi");
+    } finally {
+      setLoadingAudio(false);
     }
   };
 
@@ -52,15 +89,30 @@ export default function Home({ refreshKey, onDraft, onChanged }) {
             <Sparkles className="h-4 w-4 text-forest" strokeWidth={2.4} />
             <h3 className="font-display text-base font-bold text-forest">Briefing AI</h3>
           </div>
-          <button
-            data-testid="brief-refresh-btn"
-            onClick={loadBrief}
-            disabled={loadingBrief}
-            className="flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-forest shadow-card transition-transform active:scale-95"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loadingBrief ? "animate-spin" : ""}`} strokeWidth={2.6} />
-            {brief ? "Perbarui" : "Buat"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              data-testid="brief-speak-btn"
+              onClick={speak}
+              disabled={loadingAudio}
+              className="flex items-center gap-1.5 rounded-full bg-forest px-3 py-1.5 text-xs font-bold text-sand shadow-card transition-transform active:scale-95 disabled:opacity-60"
+            >
+              {speaking ? (
+                <Pause className="h-3.5 w-3.5" strokeWidth={2.6} />
+              ) : (
+                <Volume2 className="h-3.5 w-3.5" strokeWidth={2.6} />
+              )}
+              {loadingAudio ? "Menyiapkan…" : speaking ? "Jeda" : "Bacakan"}
+            </button>
+            <button
+              data-testid="brief-refresh-btn"
+              onClick={loadBrief}
+              disabled={loadingBrief}
+              className="flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-forest shadow-card transition-transform active:scale-95"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loadingBrief ? "animate-spin" : ""}`} strokeWidth={2.6} />
+              {brief ? "Perbarui" : "Buat"}
+            </button>
+          </div>
         </div>
         <p className="mt-3 text-sm leading-relaxed text-forest/90" data-testid="brief-text">
           {loadingBrief ? "Menyusun briefing hari ini…" : brief || "Tekan Buat untuk mendapatkan briefing harian dari VoiceBiz."}

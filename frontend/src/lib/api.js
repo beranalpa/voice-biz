@@ -18,6 +18,8 @@ export const getSettings = () => axios.get(`${API}/settings`).then((r) => r.data
 export const updateSettings = (payload) => axios.put(`${API}/settings`, payload).then((r) => r.data);
 export const correctLast = (payload) => axios.post(`${API}/nlu/correct`, payload).then((r) => r.data);
 export const suggestTarget = () => axios.get(`${API}/settings/suggest-target`).then((r) => r.data);
+export const getPurchases = () => axios.get(`${API}/purchases/history`).then((r) => r.data);
+export const briefAudioUrl = (text) => `${API}/brief/audio?text=${encodeURIComponent(text)}`;
 export const getShoppingList = () => axios.get(`${API}/shopping-list`).then((r) => r.data);
 export const restockItem = (id, qty) =>
   axios.post(`${API}/inventory/${id}/restock`, { qty: qty ?? null }).then((r) => r.data);

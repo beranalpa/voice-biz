@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import logging
 import os
@@ -11,7 +12,7 @@ from typing import Annotated, List, Optional
 
 from bson import ObjectId
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile, Response
 from motor.motor_asyncio import AsyncIOMotorClient
 from PIL import Image
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
@@ -55,6 +56,7 @@ def now_iso() -> str:
 class SaleItem(BaseModel):
     name: str
     qty: float = 1
+    unit: Optional[str] = None
     unit_price: Optional[float] = None
     subtotal: Optional[float] = None
 
@@ -72,6 +74,7 @@ class Expense(BaseDocument):
     total: float = 0
     category: Optional[str] = None
     note: Optional[str] = None
+    items: List[SaleItem] = []
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -121,6 +124,7 @@ class CommitRequest(BaseModel):
     note: Optional[str] = None
     raw_text: Optional[str] = None
     inventory_unit: Optional[str] = None
+    add_to_inventory: bool = False
 
 
 class CorrectionRequest(BaseModel):
@@ -295,10 +299,32 @@ async def apply_commit(req: CommitRequest):
 
     elif intent == "expense":
         title = (req.items[0].name if req.items else None) or req.note or req.title or "Pengeluaran"
-        exp = Expense(title=title, total=total, category=req.category, note=req.note)
+        exp = Expense(title=title, total=total, category=req.category, note=req.note, items=req.items)
         res = await db.expenses.insert_one(exp.to_mongo())
         ops.append({"op": "delete", "coll": "expenses", "id": str(res.inserted_id)})
         message = f"Pengeluaran {rupiah(total)} tersimpan"
+        if req.add_to_inventory:
+            added = []
+            for it in req.items:
+                inv = await db.inventory.find_one({"name": {"$regex": f"^{it.name}$", "$options": "i"}})
+                if inv:
+                    await db.inventory.update_one(
+                        {"_id": inv["_id"]},
+                        {"$set": {"qty": inv["qty"] + (it.qty or 1), "updated_at": now_iso()}},
+                    )
+                    ops.append({"op": "set", "coll": "inventory", "id": str(inv["_id"]),
+                                "fields": {"qty": inv["qty"], "updated_at": inv["updated_at"]}})
+                else:
+                    new_inv = await db.inventory.insert_one(
+                        InventoryItem(
+                            name=it.name, qty=it.qty or 1, unit=it.unit or req.inventory_unit or "pcs",
+                            min_qty=max(1, round((it.qty or 1) / 2)),
+                        ).to_mongo()
+                    )
+                    ops.append({"op": "delete", "coll": "inventory", "id": str(new_inv.inserted_id)})
+                added.append(it.name)
+            if added:
+                message += f" & stok {', '.join(added)} bertambah"
         ops.append(await log_activity("expense", f"Pengeluaran {title} — {rupiah(total)}"))
 
     elif intent == "receivable":
@@ -405,6 +431,87 @@ async def correct_last(req: CorrectionRequest):
         "history_id": history_id,
         "previous": h["message"],
     }
+
+
+@api_router.get("/purchases/history")
+async def purchase_history():
+    expenses = await db.expenses.find({}, {"_id": 0}).to_list(2000)
+    groups: dict[str, dict] = {}
+    for e in expenses:
+        rows = e.get("items") or [{"name": e["title"], "qty": 1, "unit": None,
+                                   "unit_price": e["total"], "subtotal": e["total"]}]
+        for it in rows:
+            key = (it.get("name") or e["title"]).strip().lower()
+            g = groups.setdefault(key, {
+                "name": (it.get("name") or e["title"]).strip().title(),
+                "times": 0, "total_spent": 0, "total_qty": 0,
+                "unit": it.get("unit"), "prices": [], "last_at": e["created_at"],
+            })
+            qty = it.get("qty") or 1
+            sub = it.get("subtotal") or (qty * (it.get("unit_price") or 0)) or 0
+            g["times"] += 1
+            g["total_spent"] += sub
+            g["total_qty"] += qty
+            g["unit"] = g["unit"] or it.get("unit")
+            if it.get("unit_price"):
+                g["prices"].append({"price": it["unit_price"], "at": e["created_at"]})
+            if e["created_at"] > g["last_at"]:
+                g["last_at"] = e["created_at"]
+
+    out = []
+    for g in groups.values():
+        prices = sorted(g["prices"], key=lambda p: p["at"])
+        cheapest = min((p["price"] for p in prices), default=None)
+        latest = prices[-1]["price"] if prices else None
+        hint = None
+        if cheapest and latest and latest > cheapest * 1.1:
+            hint = (
+                f"Harga terakhir {rupiah(latest)}, pernah dapat {rupiah(cheapest)}. "
+                f"Coba nego atau bandingkan pemasok."
+            )
+        elif g["times"] >= 3:
+            hint = f"Sudah {g['times']}× beli — minta harga langganan ke pemasok."
+        out.append({
+            "name": g["name"],
+            "times": g["times"],
+            "total_spent": round(g["total_spent"]),
+            "total_qty": round(g["total_qty"], 2),
+            "unit": g["unit"],
+            "avg_unit_price": round(sum(p["price"] for p in prices) / len(prices)) if prices else None,
+            "cheapest_unit_price": cheapest,
+            "latest_unit_price": latest,
+            "last_at": g["last_at"],
+            "hint": hint,
+        })
+    out.sort(key=lambda x: x["total_spent"], reverse=True)
+    return {"purchases": out}
+
+
+@api_router.get("/brief/audio")
+async def brief_audio(text: str):
+    from emergentintegrations.llm.openai import OpenAITextToSpeech
+
+    clean = re.sub(r"[*_#>~|`]", "", text)
+    clean = re.sub(r"https?://\S+", "", clean)
+    clean = re.sub(r"[^\w\s.,!?%:;()/-]", "", clean, flags=re.UNICODE)
+    clean = re.sub(r"\s+", " ", clean).strip()[:1200]
+    if not clean:
+        raise HTTPException(status_code=400, detail="Teks kosong")
+
+    key = hashlib.sha256(f"{clean}|nova|tts-1|1.0".encode()).hexdigest()
+    cached = await db.tts_cache.find_one({"key": key})
+    if cached:
+        return Response(content=cached["audio"], media_type="audio/mpeg",
+                        headers={"Cache-Control": "public, max-age=86400"})
+    try:
+        tts = OpenAITextToSpeech(api_key=os.environ["EMERGENT_LLM_KEY"])
+        audio = await tts.generate_speech(text=clean, model="tts-1", voice="nova")
+    except Exception as e:
+        logger.exception("tts failed")
+        raise HTTPException(status_code=500, detail=f"Gagal membuat suara: {e}")
+    await db.tts_cache.insert_one({"key": key, "audio": audio, "created_at": now_iso()})
+    return Response(content=audio, media_type="audio/mpeg",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @api_router.get("/settings/suggest-target")
@@ -643,6 +750,18 @@ async def weekly_report(period: str = "weekly"):
     revenue = sum(s["total"] for s in week_sales)
     expense = sum(e["total"] for e in week_expenses)
 
+    prev_start = start - timedelta(days=days)
+    prev_end = start - timedelta(days=1)
+    prev_sales = [s for s in sales if prev_start <= d(s) <= prev_end]
+    prev_expenses = [e for e in expenses if prev_start <= d(e) <= prev_end]
+    prev_revenue = sum(s["total"] for s in prev_sales)
+    prev_expense = sum(e["total"] for e in prev_expenses)
+
+    def delta(now_v, prev_v):
+        if not prev_v:
+            return None
+        return round((now_v - prev_v) / prev_v * 100)
+
     per_item: dict[str, dict] = {}
     for s in week_sales:
         for it in s.get("items", []):
@@ -684,6 +803,17 @@ async def weekly_report(period: str = "weekly"):
         "best_day": {"date": best_day[0], "revenue": best_day[1]} if best_day else None,
         "outstanding_receivables": outstanding,
         "expense_breakdown": breakdown,
+        "comparison": {
+            "label": "7 hari sebelumnya" if days == 7 else "30 hari sebelumnya",
+            "period": f"{id_date(prev_start)} – {id_date(prev_end)}",
+            "revenue": prev_revenue,
+            "expense": prev_expense,
+            "profit": prev_revenue - prev_expense,
+            "transactions": len(prev_sales),
+            "revenue_delta": delta(revenue, prev_revenue),
+            "expense_delta": delta(expense, prev_expense),
+            "profit_delta": delta(revenue - expense, prev_revenue - prev_expense),
+        },
         "top_expenses": [{"title": e["title"], "total": e["total"], "category": e.get("category")} for e in top_expenses],
     }
     try:
@@ -699,6 +829,10 @@ async def weekly_report(period: str = "weekly"):
         f"Laba: {rupiah(data['profit'])}",
         f"Transaksi: {len(week_sales)} · Rata-rata/hari: {rupiah(data['avg_per_day'])}",
     ]
+    cmp_ = data["comparison"]
+    if cmp_["revenue_delta"] is not None:
+        arah = "naik" if cmp_["revenue_delta"] >= 0 else "turun"
+        lines.append(f"Omzet {arah} {abs(cmp_['revenue_delta'])}% dari {cmp_['label']} ({rupiah(cmp_['revenue'])})")
     if top_items:
         lines.append("Terlaris: " + ", ".join(f"{t['name']} ({int(t['qty'])})" for t in top_items))
     if outstanding:

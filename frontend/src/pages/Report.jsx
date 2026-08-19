@@ -93,6 +93,49 @@ export default function Report({ refreshKey }) {
             <p className="text-sm leading-relaxed text-forest">{data.narrative}</p>
           </div>
 
+          {data.comparison && (
+            <section className="rounded-2xl border border-hairline bg-white p-5 shadow-card" data-testid="report-comparison">
+              <div className="flex items-baseline justify-between">
+                <h3 className="font-display text-base font-bold text-ink">Bandingkan periode</h3>
+                <span className="text-xs text-mutedink">{data.comparison.period}</span>
+              </div>
+              <div className="mt-4 space-y-3">
+                {[
+                  { label: "Omzet", now: data.revenue, prev: data.comparison.revenue, delta: data.comparison.revenue_delta, good: true },
+                  { label: "Pengeluaran", now: data.expense, prev: data.comparison.expense, delta: data.comparison.expense_delta, good: false },
+                  { label: "Laba", now: data.profit, prev: data.comparison.profit, delta: data.comparison.profit_delta, good: true },
+                ].map((row) => {
+                  const positive = row.delta === null ? null : row.good ? row.delta >= 0 : row.delta <= 0;
+                  return (
+                    <div key={row.label} className="flex items-center justify-between gap-3" data-testid={`compare-${row.label.toLowerCase()}`}>
+                      <div>
+                        <p className="font-display text-sm font-bold text-ink">{row.label}</p>
+                        <p className="text-xs text-mutedink">
+                          {rupiah(row.now)} vs {rupiah(row.prev)}
+                        </p>
+                      </div>
+                      {row.delta === null ? (
+                        <span className="rounded-full bg-muted px-3 py-1 text-xs font-bold text-mutedink">Data baru</span>
+                      ) : (
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-bold ${
+                            positive ? "bg-forest-light text-forest" : "bg-terracotta-light text-[#A63A2A]"
+                          }`}
+                        >
+                          {row.delta >= 0 ? "+" : ""}
+                          {row.delta}%
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-4 text-xs text-mutedink">
+                Dibandingkan dengan {data.comparison.label} ({data.comparison.transactions} transaksi).
+              </p>
+            </section>
+          )}
+
           <section className="space-y-3">
             <h3 className="font-display text-base font-bold text-ink">Menu terlaris</h3>
             {data.top_items.length === 0 && <p className="text-sm text-mutedink">Belum ada penjualan pada periode ini.</p>}

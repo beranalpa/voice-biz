@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Pencil, X, MessageCircleQuestion } from "lucide-react";
+import { Check, Pencil, X, MessageCircleQuestion, Boxes } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { INTENT_LABELS, rupiah } from "../lib/api";
@@ -7,10 +7,12 @@ import { INTENT_LABELS, rupiah } from "../lib/api";
 export const ConfirmSheet = ({ draft, onSave, onCancel, saving }) => {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(draft);
+  const [addStock, setAddStock] = useState(false);
 
   useEffect(() => {
     setForm(draft);
     setEditing(false);
+    setAddStock(draft?.intent === "expense" && (draft?.items || []).length > 0);
   }, [draft]);
 
   if (!draft) return null;
@@ -102,6 +104,35 @@ export const ConfirmSheet = ({ draft, onSave, onCancel, saving }) => {
                 </span>
               )}
             </div>
+
+            {draft.intent === "expense" && (form.items || []).length > 0 && (
+              <button
+                data-testid="add-to-stock-toggle"
+                onClick={() => setAddStock((v) => !v)}
+                className={`flex w-full items-center justify-between gap-3 rounded-2xl border p-4 text-left transition-colors ${
+                  addStock ? "border-forest/25 bg-forest-light" : "border-hairline bg-sand"
+                }`}
+              >
+                <span>
+                  <span className="flex items-center gap-2 font-display text-sm font-bold text-ink">
+                    <Boxes className="h-4 w-4 text-forest" strokeWidth={2.5} />
+                    Tambahkan juga ke stok
+                  </span>
+                  <span className="mt-0.5 block text-xs text-mutedink">
+                    {(form.items || []).map((i) => `${i.qty} ${i.unit || ""} ${i.name}`.trim()).join(", ")}
+                  </span>
+                </span>
+                <span
+                  className={`flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors ${
+                    addStock ? "bg-forest" : "bg-hairline"
+                  }`}
+                >
+                  <span
+                    className={`h-5 w-5 rounded-full bg-white transition-transform ${addStock ? "translate-x-5" : ""}`}
+                  />
+                </span>
+              </button>
+            )}
           </div>
         )}
 
@@ -119,7 +150,7 @@ export const ConfirmSheet = ({ draft, onSave, onCancel, saving }) => {
               <Button
                 data-testid="confirm-save-btn"
                 disabled={saving}
-                onClick={() => onSave(form)}
+                onClick={() => onSave({ ...form, add_to_inventory: addStock })}
                 className="h-14 flex-1 rounded-full bg-forest text-base font-bold hover:bg-forest-hover"
               >
                 <Check className="mr-2 h-5 w-5" strokeWidth={2.6} />

@@ -44,6 +44,14 @@ Bangun web app full-stack "VoiceBiz": asisten bisnis AI untuk pemilik usaha mikr
 - **Pengingat Belanja**: `GET /api/shopping-list` (bahan di bawah stok minimum + jumlah yang perlu dibeli + teks siap salin/WA) dan `POST /api/inventory/{id}/restock` yang tercatat di history sehingga bisa di-undo. Kartu "Belanja sebelum jam sibuk" di Beranda dengan tombol "Sudah beli".
 - **Catat Lewat Foto**: `POST /api/expenses/from-receipt` — foto nota di-resize (Pillow) lalu dibaca `gpt-5.6-luna` (vision, ImageContent) menjadi draft pengeluaran (item, qty, harga, total, kategori) yang muncul di kartu konfirmasi. Tombol kamera di panel Tap to Talk.
 
+### Iterasi 5 (2026-06)
+- **Nota Jadi Stok**: `SaleItem.unit` + `Expense.items` disimpan; `CommitRequest.add_to_inventory` menambah/membuat stok bahan dari item nota (bisa di-undo). Toggle "Tambahkan juga ke stok" di kartu konfirmasi, aktif otomatis untuk pengeluaran ber-item.
+- **Riwayat Belanja**: `GET /api/purchases/history` mengelompokkan pembelian per bahan (frekuensi, total belanja, harga termurah vs terakhir, tanggal terakhir) + hint nego ("Harga terakhir Rp25.000, pernah dapat Rp20.500"). Tab baru "Belanja" di Memori.
+- **Perbandingan Periode**: laporan mengirim `comparison` (periode sebelumnya + delta omzet/biaya/laba) dan ikut masuk ke teks share; kartu "Bandingkan periode" di tab Laporan.
+- **Ringkasan Suara**: `GET /api/brief/audio?text=` memakai OpenAI TTS (`tts-1`, voice `nova`) via emergentintegrations, dengan cache di koleksi `tts_cache` dan sanitasi teks. Tombol "Bacakan"/"Jeda" di kartu Briefing AI. Catatan: voice OpenAI beraksen Inggris untuk Bahasa Indonesia (batas provider); ElevenLabs multilingual bisa dipakai kalau ingin aksen lokal.
+- **Data demo diperkaya**: seed kini 20 hari riwayat penjualan + belanja ber-item (harga naik-turun), sehingga tren, perbandingan periode, dan hint nego pemasok langsung terlihat hidup.
+- **Mode Demo Juri jadi 12 babak**: penjualan → koreksi ucapan → piutang → pengeluaran (+stok) → undo → tagih WhatsApp → daftar belanja (+restock) → target otomatis (+diterapkan) → riwayat belanja → laporan + perbandingan → briefing bersuara → jawaban laba. Shortcut akhir ke Tagih / Belanja / Laporan.
+
 ## Backlog
 ### P0
 ### P1

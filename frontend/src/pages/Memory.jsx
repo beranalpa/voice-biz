@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Boxes, HandCoins, MessageCircle, Receipt, ShoppingBasket, Users } from "lucide-react";
+import { Boxes, HandCoins, MessageCircle, Receipt, ShoppingBasket, Truck, Users } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { ReminderSheet } from "../components/ReminderSheet";
-import { getMemory, rupiah } from "../lib/api";
+import { getMemory, getPurchases, rupiah } from "../lib/api";
 
 const fmtDate = (iso) =>
   new Date(iso).toLocaleDateString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -19,10 +19,12 @@ const Row = ({ title, subtitle, right, tone = "text-forest", testid }) => (
 
 export default function Memory({ refreshKey }) {
   const [data, setData] = useState(null);
+  const [purchases, setPurchases] = useState([]);
   const [reminderOpen, setReminderOpen] = useState(false);
 
   useEffect(() => {
     getMemory().then(setData).catch(() => {});
+    getPurchases().then((r) => setPurchases(r.purchases)).catch(() => {});
   }, [refreshKey]);
 
   if (!data) return <p className="p-6 text-sm text-mutedink">Memuat memori bisnis…</p>;
@@ -32,6 +34,7 @@ export default function Memory({ refreshKey }) {
     { key: "expenses", label: "Biaya", icon: Receipt },
     { key: "receivables", label: "Piutang", icon: HandCoins },
     { key: "inventory", label: "Stok", icon: Boxes },
+    { key: "purchases", label: "Belanja", icon: Truck },
     { key: "customers", label: "Pelanggan", icon: Users },
   ];
 
@@ -43,13 +46,13 @@ export default function Memory({ refreshKey }) {
       </div>
 
       <Tabs defaultValue="sales">
-        <TabsList className="grid h-auto w-full grid-cols-5 rounded-2xl bg-white p-1">
+        <TabsList className="grid h-auto w-full grid-cols-6 rounded-2xl bg-white p-1">
           {tabs.map((t) => (
             <TabsTrigger
               key={t.key}
               value={t.key}
               data-testid={`memory-tab-${t.key}`}
-              className="flex flex-col gap-1 rounded-xl py-2 text-[10px] font-semibold data-[state=active]:bg-forest-light data-[state=active]:text-forest"
+              className="flex flex-col gap-1 rounded-xl py-2 text-[9px] font-semibold data-[state=active]:bg-forest-light data-[state=active]:text-forest"
             >
               <t.icon className="h-4 w-4" strokeWidth={2.4} />
               {t.label}
@@ -120,6 +123,50 @@ export default function Memory({ refreshKey }) {
               right={`${it.qty} ${it.unit}`}
               tone={it.qty <= it.min_qty ? "text-terracotta" : "text-forest"}
             />
+          ))}
+        </TabsContent>
+
+        <TabsContent value="purchases" className="mt-4 space-y-3">
+          {purchases.length === 0 && (
+            <p className="text-sm text-mutedink">Belum ada riwayat belanja bahan.</p>
+          )}
+          {purchases.map((p, i) => (
+            <article
+              key={p.name}
+              data-testid={`purchase-row-${i}`}
+              className="rounded-2xl border border-hairline bg-white p-4 shadow-card"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-display text-sm font-bold text-ink">{p.name}</p>
+                  <p className="mt-0.5 text-xs text-mutedink">
+                    {p.times}× beli
+                    {p.total_qty && p.unit ? ` · total ${p.total_qty} ${p.unit}` : ""} · terakhir{" "}
+                    {fmtDate(p.last_at).split(",")[0]}
+                  </p>
+                </div>
+                <p className="shrink-0 font-display text-sm font-extrabold text-terracotta">
+                  {rupiah(p.total_spent)}
+                </p>
+              </div>
+              {p.latest_unit_price && (
+                <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                  <span className="rounded-full bg-sand px-2.5 py-1 font-semibold text-mutedink">
+                    Terakhir {rupiah(p.latest_unit_price)}
+                  </span>
+                  {p.cheapest_unit_price !== p.latest_unit_price && (
+                    <span className="rounded-full bg-forest-light px-2.5 py-1 font-semibold text-forest">
+                      Termurah {rupiah(p.cheapest_unit_price)}
+                    </span>
+                  )}
+                </div>
+              )}
+              {p.hint && (
+                <p className="mt-2.5 rounded-xl bg-[#FDF6EA] px-3 py-2 text-xs font-medium text-[#8A6520]">
+                  {p.hint}
+                </p>
+              )}
+            </article>
           ))}
         </TabsContent>
 

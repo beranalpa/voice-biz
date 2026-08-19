@@ -1,15 +1,35 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FileBarChart, Loader2, MessageCircle, Mic, Pause, Play, Sparkles, Undo2, X } from "lucide-react";
+import {
+  Check,
+  FileBarChart,
+  Loader2,
+  MessageCircle,
+  Mic,
+  Pause,
+  Play,
+  Sparkles,
+  Target,
+  Truck,
+  Undo2,
+  Volume2,
+} from "lucide-react";
 import { Button } from "./ui/button";
 import {
+  briefAudioUrl,
   commitDraft,
   correctLast,
+  getBrief,
+  getPurchases,
   getReminders,
+  getShoppingList,
   getWeekly,
   parseText,
   resetDemo,
+  restockItem,
   rupiah,
+  suggestTarget,
   undoHistory,
+  updateSettings,
   INTENT_LABELS,
 } from "../lib/api";
 
@@ -22,18 +42,18 @@ const STEPS = [
   {
     kind: "say",
     text: "Salah, tadi itu 97 ribu",
-    caption: "Cukup bilang “salah” — catatan terakhir langsung diperbaiki, bukan dobel.",
+    caption: "Cukup bilang “salah” — catatan terakhir diperbaiki, bukan jadi dobel.",
     correct: true,
   },
   {
     kind: "say",
     text: "Pak Budi masih punya utang 150 ribu dari minggu lalu",
-    caption: "VoiceBiz mengenali piutang dan langsung mengingat nama pelanggan.",
+    caption: "Piutang dikenali beserta nama pelanggannya.",
   },
   {
     kind: "say",
     text: "Beli ayam 3 kilo 105 ribu",
-    caption: "Pengeluaran bahan baku tercatat, laba hari ini ikut menyesuaikan.",
+    caption: "Pengeluaran bahan baku tercatat, laba hari ini menyesuaikan.",
   },
   {
     kind: "say",
@@ -44,12 +64,32 @@ const STEPS = [
   {
     kind: "reminder",
     text: "Tagihkan utang pelanggan saya lewat WhatsApp",
-    caption: "AI menulis pesan penagihan yang sopan — hubungan tetap terjaga.",
+    caption: "AI menulis pesan penagihan sopan; yang sudah ditagih ditandai otomatis.",
+  },
+  {
+    kind: "shopping",
+    text: "Bahan apa yang harus saya beli pagi ini?",
+    caption: "Daftar belanja dari stok nyata, dan stok langsung naik setelah dibeli.",
+  },
+  {
+    kind: "target",
+    text: "Berapa target harian yang realistis untuk saya?",
+    caption: "Target disarankan dari rata-rata omzet 30 hari, bukan angka karangan.",
+  },
+  {
+    kind: "purchases",
+    text: "Bahan apa yang paling banyak menyerap uang saya?",
+    caption: "Riwayat belanja per bahan — modal untuk nego harga ke pemasok.",
   },
   {
     kind: "weekly",
-    text: "Buatkan laporan mingguan untuk pemberi modal saya",
-    caption: "Ringkasan siap kirim: pemasukan, laba, menu terlaris, saran minggu depan.",
+    text: "Buatkan laporan untuk pemberi modal saya",
+    caption: "Laporan 7/30 hari, lengkap perbandingan dengan periode sebelumnya.",
+  },
+  {
+    kind: "voice",
+    text: "Bacakan briefing hari ini, tangan saya sedang penuh",
+    caption: "Briefing dibacakan agar bisa didengar sambil memasak.",
   },
   {
     kind: "say",
@@ -69,6 +109,7 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
   const [auto, setAuto] = useState(true);
   const tokenRef = useRef(0);
   const autoRef = useRef(true);
+  const audioRef = useRef(null);
 
   useEffect(() => {
     autoRef.current = auto;
@@ -78,6 +119,7 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
     resetDemo().then(onChanged).catch(() => {});
     return () => {
       tokenRef.current += 1;
+      audioRef.current?.pause();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -98,99 +140,125 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
       for (let i = 1; i <= step.text.length; i += 2) {
         if (!alive()) return;
         setTyped(step.text.slice(0, i));
-        await sleep(20);
+        await sleep(18);
       }
       if (!alive()) return;
       setTyped(step.text);
       setPhase("thinking");
 
-      if (step.kind === "reminder") {
-        try {
+      try {
+        if (step.kind === "reminder") {
           const r = await getReminders();
           if (!alive()) return;
           setExtra({ kind: "reminder", reminders: r.reminders.slice(0, 2) });
           setPhase("saved");
-        } catch {
-          if (alive()) setPhase("error");
-          return;
-        }
-      } else if (step.kind === "weekly") {
-        try {
-          const r = await getWeekly();
+        } else if (step.kind === "shopping") {
+          const r = await getShoppingList();
+          if (!alive()) return;
+          setExtra({ kind: "shopping", items: r.items.slice(0, 3) });
+          setPhase("saved");
+          if (r.items[0]) {
+            await sleep(1800);
+            if (!alive()) return;
+            const res = await restockItem(r.items[0].id, r.items[0].target_qty);
+            if (!alive()) return;
+            setSaved(res.message);
+            onChanged();
+          }
+        } else if (step.kind === "target") {
+          const s = await suggestTarget();
+          if (!alive()) return;
+          setExtra({ kind: "target", suggestion: s });
+          setPhase("saved");
+          await sleep(1800);
+          if (!alive()) return;
+          await updateSettings({ daily_target: s.suggested });
+          if (!alive()) return;
+          setSaved(`Target harian disetel ${rupiah(s.suggested)}`);
+          onChanged();
+        } else if (step.kind === "purchases") {
+          const r = await getPurchases();
+          if (!alive()) return;
+          setExtra({ kind: "purchases", purchases: r.purchases.slice(0, 3) });
+          setPhase("saved");
+        } else if (step.kind === "weekly") {
+          const r = await getWeekly("weekly");
           if (!alive()) return;
           setExtra({ kind: "weekly", report: r });
           setPhase("saved");
-        } catch {
-          if (alive()) setPhase("error");
-          return;
-        }
-      } else {
-        let d;
-        try {
-          d = await parseText(step.text);
-        } catch {
-          if (alive()) setPhase("error");
-          return;
-        }
-        if (!alive()) return;
-        setDraft(d);
-        setPhase("result");
-        await sleep(1500);
-        if (!alive()) return;
-
-        if (d.intent !== "question" && d.intent !== "unknown") {
-          setPhase("saving");
-          let historyId = null;
+        } else if (step.kind === "voice") {
+          const r = await getBrief();
+          if (!alive()) return;
+          setExtra({ kind: "voice", brief: r.brief });
+          setPhase("saved");
+          const audio = new Audio(briefAudioUrl(r.brief));
+          audioRef.current = audio;
           try {
-            const res = step.correct || d.intent === "correction"
-              ? await correctLast({
-                  total: Number(d.total || 0) || null,
-                  customer_name: d.customer_name || null,
-                  item_name: d.items?.[0]?.name || null,
-                  raw_text: step.text,
-                })
-              : await commitDraft({
-              intent: d.intent,
-              title: d.title,
-              items: (d.items || []).map((it) => ({
-                name: it.name,
-                qty: Number(it.qty || 1),
-                unit_price: it.unit_price ?? null,
-                subtotal: it.subtotal ?? null,
-              })),
-              total: Number(d.total || 0),
-              customer_name: d.customer_name || null,
-              category: d.category || null,
-              note: d.note || step.text,
-              raw_text: step.text,
-            });
+            await audio.play();
+            if (alive()) setSaved("Briefing sedang dibacakan…");
+          } catch {
+            if (alive()) setSaved("Tap tombol Bacakan di Beranda untuk mendengarkan.");
+          }
+          await sleep(9000);
+        } else {
+          const d = await parseText(step.text);
+          if (!alive()) return;
+          setDraft(d);
+          setPhase("result");
+          await sleep(1500);
+          if (!alive()) return;
+
+          if (d.intent !== "question" && d.intent !== "unknown") {
+            setPhase("saving");
+            let historyId = null;
+            const res =
+              step.correct || d.intent === "correction"
+                ? await correctLast({
+                    total: Number(d.total || 0) || null,
+                    customer_name: d.customer_name || null,
+                    item_name: d.items?.[0]?.name || null,
+                    raw_text: step.text,
+                  })
+                : await commitDraft({
+                    intent: d.intent,
+                    title: d.title,
+                    items: (d.items || []).map((it) => ({
+                      name: it.name,
+                      qty: Number(it.qty || 1),
+                      unit: it.unit ?? null,
+                      unit_price: it.unit_price ?? null,
+                      subtotal: it.subtotal ?? null,
+                    })),
+                    total: Number(d.total || 0),
+                    customer_name: d.customer_name || null,
+                    category: d.category || null,
+                    note: d.note || step.text,
+                    raw_text: step.text,
+                    add_to_inventory: d.intent === "expense",
+                  });
             if (!alive()) return;
             historyId = res.history_id;
             setSaved(res.message);
             onChanged();
-          } catch {
-            if (!alive()) return;
-            setSaved("Tidak bisa disimpan — lanjut ke contoh berikutnya.");
-          }
 
-          if (step.undo && historyId) {
-            await sleep(1800);
-            if (!alive()) return;
-            setPhase("undoing");
-            try {
-              const res = await undoHistory(historyId);
+            if (step.undo && historyId) {
+              await sleep(1800);
               if (!alive()) return;
-              setSaved(res.message + " — angka di dashboard kembali seperti semula.");
+              setPhase("undoing");
+              const u = await undoHistory(historyId);
+              if (!alive()) return;
+              setSaved(u.message + " — angka di dashboard kembali seperti semula.");
               onChanged();
-            } catch {
-              /* ignore */
             }
           }
+          setPhase("saved");
         }
-        setPhase("saved");
+      } catch {
+        if (alive()) setPhase("error");
+        return;
       }
 
-      await sleep(step.kind === "say" ? 2200 : 3600);
+      await sleep(step.kind === "say" ? 2200 : 3000);
       if (!alive()) return;
       if (autoRef.current) advance();
     })();
@@ -198,6 +266,7 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
   }, [index, done]);
 
   const advance = () => {
+    audioRef.current?.pause();
     if (index + 1 >= STEPS.length) {
       tokenRef.current += 1;
       setDone(true);
@@ -207,6 +276,7 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
   };
 
   const goto = (tab) => {
+    audioRef.current?.pause();
     onNavigate?.(tab);
     onClose();
   };
@@ -216,7 +286,7 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
   return (
     <div className="fixed inset-0 z-[70] flex items-end justify-center" data-testid="demo-tour">
       <div className="absolute inset-0 bg-ink/45 backdrop-blur-[2px]" />
-      <div className="vb-rise relative z-10 max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-3xl border-t border-hairline bg-white p-6 pb-8 shadow-[0_-8px_30px_rgba(0,0,0,0.16)] no-scrollbar">
+      <div className="vb-rise relative z-10 max-h-[92vh] w-full max-w-md overflow-y-auto rounded-t-3xl border-t border-hairline bg-white p-6 pb-8 shadow-[0_-8px_30px_rgba(0,0,0,0.16)] no-scrollbar">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-forest-light text-forest">
@@ -242,15 +312,18 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
             )}
             <button
               data-testid="demo-close-btn"
-              onClick={onClose}
+              onClick={() => {
+                audioRef.current?.pause();
+                onClose();
+              }}
               className="rounded-full border border-hairline p-2 text-mutedink transition-colors hover:text-terracotta"
             >
-              <X className="h-4 w-4" strokeWidth={2.4} />
+              ✕
             </button>
           </div>
         </div>
 
-        <div className="mt-4 flex gap-1.5">
+        <div className="mt-4 flex gap-1">
           {STEPS.map((_, i) => (
             <span
               key={i}
@@ -264,29 +337,39 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
         {done ? (
           <div className="mt-6" data-testid="demo-done">
             <h3 className="font-display text-2xl font-extrabold tracking-tight text-ink">
-              7 babak, nol formulir.
+              12 babak, nol formulir.
             </h3>
             <p className="mt-2 text-sm leading-relaxed text-mutedink">
-              Penjualan tercatat, piutang dibuat, pengeluaran masuk, catatan salah dibatalkan, pesan penagihan
-              WhatsApp dibuat AI, laporan mingguan siap kirim, dan laba dihitung dari data nyata.
+              Penjualan, koreksi ucapan, piutang, pengeluaran, undo, penagihan WhatsApp, daftar belanja,
+              target otomatis, riwayat belanja bahan, laporan yang bisa dibagikan, briefing bersuara, dan
+              jawaban laba dari data nyata — semuanya dari bicara.
             </p>
-            <div className="mt-5 grid grid-cols-2 gap-3">
+            <div className="mt-5 grid grid-cols-3 gap-2">
               <Button
                 data-testid="demo-goto-memory-btn"
                 variant="outline"
                 onClick={() => goto("memory")}
-                className="h-12 rounded-full border-forest/25 font-bold text-forest hover:bg-forest-light"
+                className="h-12 rounded-full border-forest/25 text-xs font-bold text-forest hover:bg-forest-light"
               >
-                <MessageCircle className="mr-2 h-4 w-4" strokeWidth={2.5} />
-                Tagih utang
+                <MessageCircle className="mr-1.5 h-4 w-4" strokeWidth={2.5} />
+                Tagih
+              </Button>
+              <Button
+                data-testid="demo-goto-purchases-btn"
+                variant="outline"
+                onClick={() => goto("memory")}
+                className="h-12 rounded-full border-forest/25 text-xs font-bold text-forest hover:bg-forest-light"
+              >
+                <Truck className="mr-1.5 h-4 w-4" strokeWidth={2.5} />
+                Belanja
               </Button>
               <Button
                 data-testid="demo-goto-report-btn"
                 variant="outline"
                 onClick={() => goto("report")}
-                className="h-12 rounded-full border-forest/25 font-bold text-forest hover:bg-forest-light"
+                className="h-12 rounded-full border-forest/25 text-xs font-bold text-forest hover:bg-forest-light"
               >
-                <FileBarChart className="mr-2 h-4 w-4" strokeWidth={2.5} />
+                <FileBarChart className="mr-1.5 h-4 w-4" strokeWidth={2.5} />
                 Laporan
               </Button>
             </div>
@@ -367,6 +450,42 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
                 </div>
               )}
 
+              {extra?.kind === "shopping" && (
+                <div className="vb-rise space-y-2 rounded-2xl border border-ochre/30 bg-[#FDF6EA] p-4" data-testid="demo-shopping">
+                  {extra.items.map((it) => (
+                    <div key={it.id} className="flex items-center justify-between text-sm">
+                      <span className="text-ink">{it.name}</span>
+                      <span className="font-display font-bold text-[#8A6520]">
+                        beli {it.suggested_qty} {it.unit}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {extra?.kind === "target" && (
+                <div className="vb-rise rounded-2xl border border-hairline bg-sand p-4" data-testid="demo-target">
+                  <div className="flex items-center gap-2 text-forest">
+                    <Target className="h-4 w-4" strokeWidth={2.5} />
+                    <p className="font-display text-lg font-extrabold">{rupiah(extra.suggestion.suggested)}/hari</p>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-mutedink">{extra.suggestion.reason}</p>
+                </div>
+              )}
+
+              {extra?.kind === "purchases" && (
+                <div className="vb-rise space-y-2 rounded-2xl border border-hairline bg-sand p-4" data-testid="demo-purchases">
+                  {extra.purchases.map((p) => (
+                    <div key={p.name} className="flex items-center justify-between text-sm">
+                      <span className="text-ink">
+                        {p.name} <span className="text-xs text-mutedink">({p.times}×)</span>
+                      </span>
+                      <span className="font-display font-bold text-terracotta">{rupiah(p.total_spent)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {extra?.kind === "weekly" && (
                 <div className="vb-rise rounded-2xl border border-hairline bg-sand p-4" data-testid="demo-weekly">
                   <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-mutedink">
@@ -378,7 +497,23 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
                     </p>
                     <p className="font-display text-xl font-extrabold text-forest">{rupiah(extra.report.revenue)}</p>
                   </div>
+                  {extra.report.comparison?.revenue_delta !== null && (
+                    <p className="mt-2 inline-flex rounded-full bg-forest-light px-2.5 py-1 text-[11px] font-bold text-forest">
+                      Omzet {extra.report.comparison.revenue_delta >= 0 ? "+" : ""}
+                      {extra.report.comparison.revenue_delta}% vs {extra.report.comparison.label}
+                    </p>
+                  )}
                   <p className="mt-2 text-sm leading-relaxed text-ink">{extra.report.narrative}</p>
+                </div>
+              )}
+
+              {extra?.kind === "voice" && (
+                <div className="vb-rise rounded-2xl border border-forest/15 bg-forest-light p-4" data-testid="demo-voice">
+                  <div className="flex items-center gap-2 text-forest">
+                    <Volume2 className="h-4 w-4" strokeWidth={2.5} />
+                    <p className="font-display text-sm font-bold">Briefing bersuara</p>
+                  </div>
+                  <p className="mt-2 text-sm leading-relaxed text-forest/90">{extra.brief}</p>
                 </div>
               )}
 
