@@ -6,7 +6,7 @@ import Memory from "./pages/Memory";
 import Report from "./pages/Report";
 import { ConfirmSheet } from "./components/ConfirmSheet";
 import { DemoTour } from "./components/DemoTour";
-import { commitDraft, resetDemo } from "./lib/api";
+import { commitDraft, correctLast, resetDemo } from "./lib/api";
 
 export default function App() {
   const [tab, setTab] = useState("home");
@@ -20,6 +20,18 @@ export default function App() {
   const handleSave = async (form) => {
     setSaving(true);
     try {
+      if (form.intent === "correction") {
+        const res = await correctLast({
+          total: Number(form.total || 0) || null,
+          customer_name: form.customer_name || null,
+          item_name: form.items?.[0]?.name || null,
+          raw_text: form.raw_text || null,
+        });
+        toast.success(res.message);
+        setDraft(null);
+        bump();
+        return;
+      }
       const res = await commitDraft({
         intent: form.intent,
         title: form.title,

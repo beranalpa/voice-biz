@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Copy, Loader2, MessageCircle, X } from "lucide-react";
+import { Copy, Loader2, MessageCircle, X, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
-import { getReminders, rupiah } from "../lib/api";
+import { getReminders, markReminded, rupiah } from "../lib/api";
 
 export const ReminderSheet = ({ onClose }) => {
   const [reminders, setReminders] = useState(null);
@@ -20,9 +20,26 @@ export const ReminderSheet = ({ onClose }) => {
 
   const current = reminders?.[active];
 
+  const flagReminded = async () => {
+    try {
+      await markReminded(current.id);
+      setReminders((rs) =>
+        rs.map((r) => (r.id === current.id ? { ...r, reminded_today: true, last_reminded_at: new Date().toISOString() } : r))
+      );
+    } catch {
+      /* ignore */
+    }
+  };
+
   const copy = async () => {
     await navigator.clipboard.writeText(current.message);
-    toast.success("Pesan disalin");
+    await flagReminded();
+    toast.success("Pesan disalin & ditandai sudah ditagih");
+  };
+
+  const send = async () => {
+    window.open(current.wa_link, "_blank");
+    await flagReminded();
   };
 
   return (
@@ -66,6 +83,7 @@ export const ReminderSheet = ({ onClose }) => {
                       : "border-hairline bg-sand text-mutedink"
                   }`}
                 >
+                  {r.reminded_today ? "✓ " : ""}
                   {r.customer_name} · {rupiah(r.remaining)}
                 </button>
               ))}
@@ -75,6 +93,15 @@ export const ReminderSheet = ({ onClose }) => {
               <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-mutedink">
                 {current.customer_name} · utang {current.days_ago} hari · {current.phone || "nomor belum ada"}
               </p>
+              {current.reminded_today && (
+                <p
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-forest-light px-2.5 py-1 text-[11px] font-bold text-forest"
+                  data-testid="reminder-already-badge"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={2.6} />
+                  Sudah ditagih hari ini
+                </p>
+              )}
               <p className="mt-2 text-sm leading-relaxed text-ink" data-testid="reminder-message">
                 {current.message}
               </p>
@@ -84,11 +111,15 @@ export const ReminderSheet = ({ onClose }) => {
               <Button
                 data-testid="reminder-send-btn"
                 disabled={!current.wa_link}
-                onClick={() => window.open(current.wa_link, "_blank")}
-                className="h-14 flex-1 rounded-full bg-forest text-base font-bold hover:bg-forest-hover"
+                onClick={send}
+                className={`h-14 flex-1 rounded-full text-base font-bold ${
+                  current.reminded_today
+                    ? "bg-mutedink hover:bg-mutedink/90"
+                    : "bg-forest hover:bg-forest-hover"
+                }`}
               >
                 <MessageCircle className="mr-2 h-5 w-5" strokeWidth={2.5} />
-                Kirim WhatsApp
+                {current.reminded_today ? "Kirim lagi" : "Kirim WhatsApp"}
               </Button>
               <Button
                 data-testid="reminder-copy-btn"

@@ -7,16 +7,18 @@ import { getWeekly, rupiah } from "../lib/api";
 export default function Report({ refreshKey }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [period, setPeriod] = useState("weekly");
 
   const load = () => {
     setLoading(true);
-    getWeekly()
+    getWeekly(period)
       .then(setData)
       .catch(() => toast.error("Gagal memuat laporan"))
       .finally(() => setLoading(false));
   };
 
-  useEffect(load, [refreshKey]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [refreshKey, period]);
 
   const copy = async () => {
     await navigator.clipboard.writeText(data.share_text);
@@ -26,10 +28,30 @@ export default function Report({ refreshKey }) {
   return (
     <div className="space-y-5" data-testid="report-page">
       <div>
-        <h2 className="font-display text-2xl font-extrabold tracking-tight text-ink">Laporan Mingguan</h2>
+        <h2 className="font-display text-2xl font-extrabold tracking-tight text-ink">
+          {period === "monthly" ? "Laporan Bulanan" : "Laporan Mingguan"}
+        </h2>
         <p className="mt-1 text-sm text-mutedink">
           Ringkasan siap dibagikan ke keluarga atau pemberi modal.
         </p>
+      </div>
+
+      <div className="flex gap-2 rounded-full border border-hairline bg-white p-1" data-testid="period-switch">
+        {[
+          { key: "weekly", label: "7 hari" },
+          { key: "monthly", label: "30 hari" },
+        ].map((p) => (
+          <button
+            key={p.key}
+            data-testid={`period-${p.key}-btn`}
+            onClick={() => setPeriod(p.key)}
+            className={`h-11 flex-1 rounded-full text-sm font-bold transition-colors ${
+              period === p.key ? "bg-forest text-sand" : "text-mutedink hover:text-forest"
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
       </div>
 
       {loading && (
@@ -48,7 +70,9 @@ export default function Report({ refreshKey }) {
             <p className="mt-2 font-display text-3xl font-extrabold tracking-tight" data-testid="report-revenue">
               {rupiah(data.revenue)}
             </p>
-            <p className="text-xs text-sand/70">Total pemasukan minggu ini</p>
+            <p className="text-xs text-sand/70">
+              Total pemasukan {period === "monthly" ? "30 hari terakhir" : "minggu ini"}
+            </p>
             <div className="mt-4 grid grid-cols-3 gap-3 border-t border-white/15 pt-4 text-xs">
               <div>
                 <p className="text-sand/60">Pengeluaran</p>
@@ -71,7 +95,7 @@ export default function Report({ refreshKey }) {
 
           <section className="space-y-3">
             <h3 className="font-display text-base font-bold text-ink">Menu terlaris</h3>
-            {data.top_items.length === 0 && <p className="text-sm text-mutedink">Belum ada penjualan minggu ini.</p>}
+            {data.top_items.length === 0 && <p className="text-sm text-mutedink">Belum ada penjualan pada periode ini.</p>}
             {data.top_items.map((t, i) => (
               <div
                 key={t.name}

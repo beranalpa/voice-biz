@@ -1,4 +1,4 @@
-import { HandCoins, PackageX, Sparkles, TrendingDown, TrendingUp, UserRoundX } from "lucide-react";
+import { HandCoins, PackageX, Sparkles, Target, TrendingDown, TrendingUp, UserRoundX } from "lucide-react";
 
 const ICONS = {
   "trending-down": TrendingDown,
@@ -6,6 +6,7 @@ const ICONS = {
   "hand-coins": HandCoins,
   "package-x": PackageX,
   "user-round-x": UserRoundX,
+  target: Target,
 };
 
 const TONE = {

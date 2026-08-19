@@ -6,6 +6,7 @@ import { parseText, transcribe } from "../lib/api";
 
 const CONTOH = [
   "Hari ini saya jual dua nasi goreng dan tiga es teh, total 87 ribu",
+  "Salah, tadi itu 97 ribu",
   "Pak Budi masih punya utang 150 ribu dari minggu lalu",
   "Beli ayam 3 kg 105 ribu",
   "Berapa untung saya hari ini?",

@@ -13,7 +13,7 @@ Tugasmu: mengubah ucapan/tulisan informal berbahasa Indonesia menjadi data bisni
 
 Balas HANYA dengan JSON valid (tanpa markdown, tanpa penjelasan) dengan bentuk:
 {
-  "intent": "sale" | "expense" | "receivable" | "receivable_payment" | "inventory" | "customer" | "question" | "unknown",
+  "intent": "sale" | "expense" | "receivable" | "receivable_payment" | "inventory" | "customer" | "question" | "correction" | "unknown",
   "title": "judul singkat Bahasa Indonesia, contoh: 'Penjualan baru terdeteksi'",
   "summary": "1 kalimat ringkas apa yang kamu pahami",
   "confidence": 0.0-1.0,
@@ -39,6 +39,7 @@ Aturan intent:
 - "inventory": stok masuk/tambah stok/sisa stok barang.
 - "customer": info pelanggan baru tanpa transaksi.
 - "question": pertanyaan tentang bisnis (contoh: "berapa untung hari ini?", "siapa yang masih ngutang?").
+- "correction": pengguna memperbaiki catatan terakhir, misalnya "salah, itu 50 ribu", "bukan 87 ribu tapi 97 ribu", "harusnya nasi goreng bukan mie goreng", "ganti nama jadi Bu Ani". Isi `total` dengan nilai BENAR yang baru (kalau disebut), `items` dengan satu item nama yang benar (kalau disebut), `customer_name` dengan nama yang benar (kalau disebut). Judul: "Koreksi catatan terakhir".
 - Field yang tidak relevan isi null atau [].
 """
 

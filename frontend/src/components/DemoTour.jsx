@@ -3,6 +3,7 @@ import { Check, FileBarChart, Loader2, MessageCircle, Mic, Pause, Play, Sparkles
 import { Button } from "./ui/button";
 import {
   commitDraft,
+  correctLast,
   getReminders,
   getWeekly,
   parseText,
@@ -17,6 +18,12 @@ const STEPS = [
     kind: "say",
     text: "Hari ini saya jual dua nasi goreng dan tiga es teh, total 87 ribu",
     caption: "Satu ucapan jadi transaksi penjualan lengkap — tanpa isi form.",
+  },
+  {
+    kind: "say",
+    text: "Salah, tadi itu 97 ribu",
+    caption: "Cukup bilang “salah” — catatan terakhir langsung diperbaiki, bukan dobel.",
+    correct: true,
   },
   {
     kind: "say",
@@ -135,7 +142,14 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
           setPhase("saving");
           let historyId = null;
           try {
-            const res = await commitDraft({
+            const res = step.correct || d.intent === "correction"
+              ? await correctLast({
+                  total: Number(d.total || 0) || null,
+                  customer_name: d.customer_name || null,
+                  item_name: d.items?.[0]?.name || null,
+                  raw_text: step.text,
+                })
+              : await commitDraft({
               intent: d.intent,
               title: d.title,
               items: (d.items || []).map((it) => ({

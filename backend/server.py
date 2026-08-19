@@ -120,6 +120,17 @@ class CommitRequest(BaseModel):
     inventory_unit: Optional[str] = None
 
 
+class CorrectionRequest(BaseModel):
+    total: Optional[float] = None
+    customer_name: Optional[str] = None
+    item_name: Optional[str] = None
+    raw_text: Optional[str] = None
+
+
+class SettingsUpdate(BaseModel):
+    daily_target: Optional[float] = None
+
+
 async def ensure_seed():
     if await db.sales.count_documents({}) == 0:
         data = demo_data()
@@ -160,16 +171,35 @@ async def touch_customer(name: Optional[str]) -> List[dict]:
     return [{"op": "delete", "coll": "customers", "id": str(res.inserted_id)}]
 
 
-async def record_history(intent: str, message: str, raw_text: Optional[str], ops: List[dict]) -> str:
+async def record_history(intent: str, message: str, raw_text: Optional[str], ops: List[dict],
+                         draft: Optional[dict] = None) -> str:
     res = await db.history.insert_one({
         "intent": intent,
         "message": message,
         "raw_text": raw_text,
         "ops": ops,
+        "draft": draft,
         "reverted": False,
         "created_at": now_iso(),
     })
     return str(res.inserted_id)
+
+
+async def revert_ops(h: dict):
+    for op in reversed(h.get("ops", [])):
+        if op["op"] == "delete":
+            await db[op["coll"]].delete_one({"_id": ObjectId(op["id"])})
+        elif op["op"] == "set":
+            await db[op["coll"]].update_one({"_id": ObjectId(op["id"])}, {"$set": op["fields"]})
+    await db.history.update_one({"_id": h["_id"]}, {"$set": {"reverted": True, "reverted_at": now_iso()}})
+
+
+async def get_settings_doc() -> dict:
+    doc = await db.settings.find_one({"key": "app"})
+    if not doc:
+        doc = {"key": "app", "daily_target": 300000}
+        await db.settings.insert_one(doc)
+    return doc
 
 
 def wa_link(phone: Optional[str], message: str) -> Optional[str]:
@@ -230,8 +260,7 @@ async def parse(req: ParseRequest):
     return draft
 
 
-@api_router.post("/nlu/commit")
-async def commit(req: CommitRequest):
+async def apply_commit(req: CommitRequest):
     intent = req.intent
     total = float(req.total or 0)
     ops: List[dict] = []
@@ -321,8 +350,81 @@ async def commit(req: CommitRequest):
     else:
         raise HTTPException(status_code=400, detail="Intent ini tidak bisa disimpan")
 
-    history_id = await record_history(intent, message, req.raw_text, ops)
+    return message, ops
+
+
+@api_router.post("/nlu/commit")
+async def commit(req: CommitRequest):
+    message, ops = await apply_commit(req)
+    history_id = await record_history(req.intent, message, req.raw_text, ops, req.model_dump())
     return {"ok": True, "message": message, "history_id": history_id}
+
+
+@api_router.post("/nlu/correct")
+async def correct_last(req: CorrectionRequest):
+    h = await db.history.find_one(
+        {"reverted": False, "draft": {"$ne": None}}, sort=[("created_at", -1)]
+    )
+    if not h:
+        raise HTTPException(status_code=404, detail="Belum ada catatan yang bisa dikoreksi")
+
+    draft = dict(h["draft"])
+    await revert_ops(h)
+
+    if req.customer_name:
+        draft["customer_name"] = req.customer_name
+    items = draft.get("items") or []
+    if req.item_name and items:
+        items[0]["name"] = req.item_name
+    if req.total:
+        draft["total"] = req.total
+        if len(items) == 1:
+            qty = items[0].get("qty") or 1
+            items[0]["subtotal"] = req.total
+            items[0]["unit_price"] = round(req.total / qty) if qty else req.total
+        else:
+            for it in items:
+                it["subtotal"] = None
+                it["unit_price"] = None
+    draft["items"] = items
+    draft["raw_text"] = req.raw_text or draft.get("raw_text")
+
+    new_req = CommitRequest(**draft)
+    message, ops = await apply_commit(new_req)
+    history_id = await record_history(new_req.intent, f"Dikoreksi → {message}", req.raw_text, ops, draft)
+    return {
+        "ok": True,
+        "message": f"Catatan sebelumnya diperbaiki. {message}",
+        "history_id": history_id,
+        "previous": h["message"],
+    }
+
+
+@api_router.get("/settings")
+async def read_settings():
+    doc = await get_settings_doc()
+    return {"daily_target": doc.get("daily_target", 300000)}
+
+
+@api_router.put("/settings")
+async def update_settings(req: SettingsUpdate):
+    await get_settings_doc()
+    if req.daily_target is not None:
+        await db.settings.update_one({"key": "app"}, {"$set": {"daily_target": float(req.daily_target)}})
+    doc = await get_settings_doc()
+    return {"daily_target": doc.get("daily_target", 300000)}
+
+
+@api_router.post("/receivables/{rid}/reminded")
+async def mark_reminded(rid: str):
+    try:
+        oid = ObjectId(rid)
+    except Exception:
+        raise HTTPException(status_code=400, detail="ID piutang tidak valid")
+    res = await db.receivables.update_one({"_id": oid}, {"$set": {"last_reminded_at": now_iso()}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Piutang tidak ditemukan")
+    return {"ok": True, "message": "Ditandai sudah ditagih hari ini"}
 
 
 @api_router.get("/history")
@@ -341,12 +443,7 @@ async def undo_history(hid: str):
         raise HTTPException(status_code=404, detail="Riwayat tidak ditemukan")
     if h.get("reverted"):
         raise HTTPException(status_code=400, detail="Catatan ini sudah dibatalkan")
-    for op in reversed(h.get("ops", [])):
-        if op["op"] == "delete":
-            await db[op["coll"]].delete_one({"_id": ObjectId(op["id"])})
-        elif op["op"] == "set":
-            await db[op["coll"]].update_one({"_id": ObjectId(op["id"])}, {"$set": op["fields"]})
-    await db.history.update_one({"_id": h["_id"]}, {"$set": {"reverted": True, "reverted_at": now_iso()}})
+    await revert_ops(h)
     return {"ok": True, "message": f"Dibatalkan: {h['message']}"}
 
 
@@ -373,6 +470,7 @@ async def receivable_reminders():
         raise HTTPException(status_code=500, detail=f"Gagal membuat pesan penagihan: {e}")
 
     by_name = {m.get("customer_name", "").lower(): m.get("message", "") for m in messages}
+    today_str = str(datetime.now(timezone.utc).date())
     out = []
     for r, p in zip(receivables, payload):
         msg = by_name.get(r["customer_name"].lower()) or (
@@ -380,6 +478,7 @@ async def receivable_reminders():
             f"{rupiah(p['remaining'])}. Terima kasih banyak 🙏"
         )
         phone = phones.get(r["customer_name"].lower())
+        last = r.get("last_reminded_at")
         out.append({
             "id": str(r["_id"]),
             "customer_name": r["customer_name"],
@@ -388,14 +487,17 @@ async def receivable_reminders():
             "phone": phone,
             "message": msg,
             "wa_link": wa_link(phone, msg),
+            "last_reminded_at": last,
+            "reminded_today": bool(last and last[:10] == today_str),
         })
     return {"reminders": out}
 
 
 @api_router.get("/reports/weekly")
-async def weekly_report():
+async def weekly_report(period: str = "weekly"):
+    days = 30 if period == "monthly" else 7
     today = datetime.now(timezone.utc).date()
-    start = today - timedelta(days=6)
+    start = today - timedelta(days=days - 1)
     sales = await db.sales.find({}, {"_id": 0}).to_list(2000)
     expenses = await db.expenses.find({}, {"_id": 0}).to_list(2000)
     receivables = await db.receivables.find({}, {"_id": 0}).to_list(2000)
@@ -428,12 +530,14 @@ async def weekly_report():
         return f"{dt.day} {bulan[dt.month - 1]}"
 
     data = {
+        "period_type": period,
+        "days": days,
         "period": f"{id_date(start)} – {id_date(today)} {today.year}",
         "revenue": revenue,
         "expense": expense,
         "profit": revenue - expense,
         "transactions": len(week_sales),
-        "avg_per_day": round(revenue / 7),
+        "avg_per_day": round(revenue / days),
         "top_items": top_items,
         "best_day": {"date": best_day[0], "revenue": best_day[1]} if best_day else None,
         "outstanding_receivables": outstanding,
@@ -445,7 +549,7 @@ async def weekly_report():
         raise HTTPException(status_code=500, detail=f"Gagal membuat laporan: {e}")
 
     lines = [
-        f"*Laporan VoiceBiz* ({data['period']})",
+        f"*Laporan VoiceBiz {'Bulanan' if period == 'monthly' else 'Mingguan'}* ({data['period']})",
         f"Pemasukan: {rupiah(revenue)}",
         f"Pengeluaran: {rupiah(expense)}",
         f"Laba: {rupiah(data['profit'])}",
@@ -538,6 +642,28 @@ async def dashboard():
     ]
 
     insights = []
+    settings = await get_settings_doc()
+    daily_target = float(settings.get("daily_target", 300000))
+    target_remaining = max(0, daily_target - rev_today)
+    hour_wib = (datetime.now(timezone.utc) + timedelta(hours=7)).hour
+    if target_remaining > 0:
+        insights.append({
+            "type": "info", "icon": "target",
+            "title": f"Sisa {rupiah(target_remaining)} untuk capai target hari ini",
+            "body": f"Target {rupiah(daily_target)} · sudah {round(rev_today / daily_target * 100) if daily_target else 0}% tercapai.",
+            "action": (
+                "Masih ada waktu — tawarkan paket hemat ke pelanggan langganan lewat WhatsApp."
+                if hour_wib < 16
+                else "Sisa jam ramai malam: dorong menu terlaris dan bundling minuman."
+            ),
+        })
+    else:
+        insights.append({
+            "type": "good", "icon": "target",
+            "title": "Target harian tercapai 🎉",
+            "body": f"Omzet {rupiah(rev_today)} dari target {rupiah(daily_target)}.",
+            "action": "Naikkan target besok sedikit agar usaha terus tumbuh.",
+        })
     if rev_yesterday and rev_today < rev_yesterday * 0.7:
         drop = round((1 - rev_today / rev_yesterday) * 100)
         insights.append({
@@ -583,6 +709,9 @@ async def dashboard():
         "expense_today": exp_today,
         "profit_today": rev_today - exp_today,
         "revenue_yesterday": rev_yesterday,
+        "daily_target": daily_target,
+        "target_remaining": target_remaining,
+        "target_progress": round(min(100, rev_today / daily_target * 100)) if daily_target else 0,
         "transactions_today": len([s for s in sales if d(s) == today]),
         "outstanding_receivables": outstanding,
         "low_stock_count": len(low_stock),

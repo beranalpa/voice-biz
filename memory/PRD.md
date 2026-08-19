@@ -32,6 +32,12 @@ Bangun web app full-stack "VoiceBiz": asisten bisnis AI untuk pemilik usaha mikr
 - **Laporan Mingguan**: `GET /api/reports/weekly` (omzet, biaya, laba, rata-rata/hari, menu terlaris, hari terbaik, piutang, narasi LLM, `share_text` + `share_link`); tab Laporan dengan tombol Bagikan & Salin.
 - **Mode Demo Juri**: tur 7 babak sekali klik (tombol "Demo" di header) yang memainkan perintah suara paling mengesankan, menyimpan otomatis, mendemokan Undo, pesan penagihan WhatsApp, laporan mingguan, lalu jawaban laba dari data nyata. Bisa dijeda/lanjut manual, dan reset data demo di awal.
 
+### Iterasi 3 (2026-06)
+- **Tandai Sudah Ditagih**: `POST /api/receivables/{id}/reminded` menyimpan `last_reminded_at`; endpoint reminders mengembalikan `reminded_today`, UI menampilkan badge "Sudah ditagih hari ini", chip bertanda ✓, dan tombol berubah jadi "Kirim lagi". Menandai otomatis saat Kirim/Salin.
+- **Target Harian**: koleksi `settings` (`daily_target`, default Rp300.000) + `GET/PUT /api/settings`; dashboard mengirim `daily_target`, `target_remaining`, `target_progress`; kartu Target di Beranda (progress bar, sisa kejar, ubah target inline) dan insight khusus yang menyesuaikan saran berdasarkan jam (WIB).
+- **Laporan Bulanan**: `GET /api/reports/weekly?period=weekly|monthly` (7 vs 30 hari, rata-rata per hari mengikuti periode, judul share text menyesuaikan); toggle "7 hari / 30 hari" di tab Laporan.
+- **Koreksi Lewat Suara**: intent `correction` di NLU ("salah, itu 50 ribu"); `POST /api/nlu/correct` membatalkan catatan terakhir (pakai `draft` yang tersimpan di history) lalu mencatat ulang dengan nilai/nama/item yang benar, tercatat sebagai "Dikoreksi → …". Tersedia sebagai chip contoh di Tap to Talk dan satu babak baru di Mode Demo Juri (total 8 babak).
+
 ## Backlog
 ### P0
 ### P1

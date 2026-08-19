@@ -43,6 +43,12 @@ export const ConfirmSheet = ({ draft, onSave, onCancel, saving }) => {
           </p>
         )}
 
+        {draft.intent === "correction" && (
+          <p className="mt-3 rounded-xl bg-terracotta-light px-3 py-2 text-xs font-medium text-[#A63A2A]" data-testid="confirm-correction-hint">
+            Catatan terakhir akan dibatalkan lalu dicatat ulang dengan angka yang benar.
+          </p>
+        )}
+
         {isQuestion ? (
           <div className="mt-4 flex gap-3 rounded-2xl border border-forest/15 bg-forest-light p-4" data-testid="confirm-answer">
             <MessageCircleQuestion className="mt-0.5 h-5 w-5 shrink-0 text-forest" strokeWidth={2.4} />
@@ -117,7 +123,7 @@ export const ConfirmSheet = ({ draft, onSave, onCancel, saving }) => {
                 className="h-14 flex-1 rounded-full bg-forest text-base font-bold hover:bg-forest-hover"
               >
                 <Check className="mr-2 h-5 w-5" strokeWidth={2.6} />
-                {saving ? "Menyimpan…" : "Simpan"}
+                {saving ? "Menyimpan…" : draft.intent === "correction" ? "Perbaiki" : "Simpan"}
               </Button>
               <Button
                 data-testid="confirm-edit-btn"
