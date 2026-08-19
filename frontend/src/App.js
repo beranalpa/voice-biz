@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Home as HomeIcon, Brain, RotateCcw } from "lucide-react";
+import { Home as HomeIcon, Brain, FileBarChart, RotateCcw, Sparkles } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import Home from "./pages/Home";
 import Memory from "./pages/Memory";
+import Report from "./pages/Report";
 import { ConfirmSheet } from "./components/ConfirmSheet";
+import { DemoTour } from "./components/DemoTour";
 import { commitDraft, resetDemo } from "./lib/api";
 
 export default function App() {
@@ -11,6 +13,9 @@ export default function App() {
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [tourOpen, setTourOpen] = useState(false);
+
+  const bump = () => setRefreshKey((k) => k + 1);
 
   const handleSave = async (form) => {
     setSaving(true);
@@ -62,6 +67,17 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             <button
+              data-testid="demo-tour-btn"
+              onClick={() => {
+                setTab("home");
+                setTourOpen(true);
+              }}
+              className="flex items-center gap-1.5 rounded-full bg-forest px-3.5 py-2.5 text-[11px] font-bold text-sand shadow-card transition-transform active:scale-95"
+            >
+              <Sparkles className="h-3.5 w-3.5" strokeWidth={2.6} />
+              Demo
+            </button>
+            <button
               data-testid="reset-demo-btn"
               onClick={handleReset}
               className="rounded-full border border-hairline bg-white p-2.5 text-mutedink transition-colors hover:text-forest"
@@ -69,20 +85,13 @@ export default function App() {
             >
               <RotateCcw className="h-4 w-4" strokeWidth={2.4} />
             </button>
-            <img
-              src="https://images.unsplash.com/photo-1655462502318-a5ff79542ce7?w=96&h=96&fit=crop"
-              alt="Profil pemilik"
-              className="h-10 w-10 rounded-full border-2 border-white object-cover shadow-card"
-            />
           </div>
         </header>
 
         <main className="flex-1 px-6 pb-28 pt-5">
-          {tab === "home" ? (
-            <Home refreshKey={refreshKey} onDraft={setDraft} />
-          ) : (
-            <Memory refreshKey={refreshKey} />
-          )}
+          {tab === "home" && <Home refreshKey={refreshKey} onDraft={setDraft} onChanged={bump} />}
+          {tab === "memory" && <Memory refreshKey={refreshKey} />}
+          {tab === "report" && <Report refreshKey={refreshKey} />}
         </main>
 
         <nav className="fixed bottom-0 z-40 w-full max-w-md border-t border-hairline bg-white/90 px-6 py-3 backdrop-blur-xl">
@@ -90,6 +99,7 @@ export default function App() {
             {[
               { key: "home", label: "Beranda", icon: HomeIcon },
               { key: "memory", label: "Memori", icon: Brain },
+              { key: "report", label: "Laporan", icon: FileBarChart },
             ].map((t) => (
               <button
                 key={t.key}
@@ -114,6 +124,8 @@ export default function App() {
             onCancel={() => setDraft(null)}
           />
         )}
+
+        {tourOpen && <DemoTour onClose={() => setTourOpen(false)} onChanged={bump} onNavigate={setTab} />}
       </div>
     </div>
   );

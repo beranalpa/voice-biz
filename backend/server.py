@@ -1,10 +1,11 @@
 import logging
 import os
+import re
 import tempfile
-import uuid
+from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Annotated, Any, List, Optional
+from typing import Annotated, List, Optional
 
 from bson import ObjectId
 from dotenv import load_dotenv
@@ -138,22 +139,46 @@ def strip_ids(docs: List[dict]) -> List[dict]:
     return docs
 
 
-async def log_activity(kind: str, text: str):
-    await db.activities.insert_one({"kind": kind, "text": text, "created_at": now_iso()})
+async def log_activity(kind: str, text: str) -> dict:
+    res = await db.activities.insert_one({"kind": kind, "text": text, "created_at": now_iso()})
+    return {"op": "delete", "coll": "activities", "id": str(res.inserted_id)}
 
 
 def rupiah(n: float) -> str:
     return "Rp" + f"{int(n):,}".replace(",", ".")
 
 
-async def touch_customer(name: Optional[str]):
+async def touch_customer(name: Optional[str]) -> List[dict]:
     if not name:
-        return
+        return []
     existing = await db.customers.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}})
     if existing:
         await db.customers.update_one({"_id": existing["_id"]}, {"$set": {"last_active": now_iso()}})
-    else:
-        await db.customers.insert_one(Customer(name=name).to_mongo())
+        return [{"op": "set", "coll": "customers", "id": str(existing["_id"]),
+                 "fields": {"last_active": existing["last_active"]}}]
+    res = await db.customers.insert_one(Customer(name=name).to_mongo())
+    return [{"op": "delete", "coll": "customers", "id": str(res.inserted_id)}]
+
+
+async def record_history(intent: str, message: str, raw_text: Optional[str], ops: List[dict]) -> str:
+    res = await db.history.insert_one({
+        "intent": intent,
+        "message": message,
+        "raw_text": raw_text,
+        "ops": ops,
+        "reverted": False,
+        "created_at": now_iso(),
+    })
+    return str(res.inserted_id)
+
+
+def wa_link(phone: Optional[str], message: str) -> Optional[str]:
+    if not phone:
+        return None
+    digits = re.sub(r"\D", "", phone)
+    if digits.startswith("0"):
+        digits = "62" + digits[1:]
+    return f"https://wa.me/{digits}?text={quote(message)}"
 
 
 # ---------- Voice / NLU ----------
@@ -209,12 +234,15 @@ async def parse(req: ParseRequest):
 async def commit(req: CommitRequest):
     intent = req.intent
     total = float(req.total or 0)
+    ops: List[dict] = []
+
     if intent == "sale":
         items = [i.model_dump() for i in req.items]
         if not total:
             total = sum((i.get("subtotal") or (i.get("qty") or 1) * (i.get("unit_price") or 0)) for i in items)
         sale = Sale(items=req.items, total=total, customer_name=req.customer_name, note=req.note)
-        await db.sales.insert_one(sale.to_mongo())
+        res = await db.sales.insert_one(sale.to_mongo())
+        ops.append({"op": "delete", "coll": "sales", "id": str(res.inserted_id)})
         for it in items:
             inv = await db.inventory.find_one({"name": {"$regex": f"^{it['name']}$", "$options": "i"}})
             if inv:
@@ -222,27 +250,31 @@ async def commit(req: CommitRequest):
                     {"_id": inv["_id"]},
                     {"$set": {"qty": max(0, inv["qty"] - (it.get("qty") or 1)), "updated_at": now_iso()}},
                 )
-        await touch_customer(req.customer_name)
+                ops.append({"op": "set", "coll": "inventory", "id": str(inv["_id"]),
+                            "fields": {"qty": inv["qty"], "updated_at": inv["updated_at"]}})
+        ops += await touch_customer(req.customer_name)
         label = ", ".join(f"{int(i['qty'])} {i['name']}" for i in items) or "Penjualan"
-        await log_activity("sale", f"Penjualan {label} — {rupiah(total)}")
-        return {"ok": True, "message": f"Penjualan {rupiah(total)} tersimpan"}
+        message = f"Penjualan {rupiah(total)} tersimpan"
+        ops.append(await log_activity("sale", f"Penjualan {label} — {rupiah(total)}"))
 
-    if intent == "expense":
+    elif intent == "expense":
         title = (req.items[0].name if req.items else None) or req.note or req.title or "Pengeluaran"
         exp = Expense(title=title, total=total, category=req.category, note=req.note)
-        await db.expenses.insert_one(exp.to_mongo())
-        await log_activity("expense", f"Pengeluaran {title} — {rupiah(total)}")
-        return {"ok": True, "message": f"Pengeluaran {rupiah(total)} tersimpan"}
+        res = await db.expenses.insert_one(exp.to_mongo())
+        ops.append({"op": "delete", "coll": "expenses", "id": str(res.inserted_id)})
+        message = f"Pengeluaran {rupiah(total)} tersimpan"
+        ops.append(await log_activity("expense", f"Pengeluaran {title} — {rupiah(total)}"))
 
-    if intent == "receivable":
+    elif intent == "receivable":
         name = req.customer_name or "Pelanggan"
         rec = Receivable(customer_name=name, amount=total, note=req.note)
-        await db.receivables.insert_one(rec.to_mongo())
-        await touch_customer(name)
-        await log_activity("receivable", f"Piutang {name} — {rupiah(total)}")
-        return {"ok": True, "message": f"Piutang {name} {rupiah(total)} tersimpan"}
+        res = await db.receivables.insert_one(rec.to_mongo())
+        ops.append({"op": "delete", "coll": "receivables", "id": str(res.inserted_id)})
+        ops += await touch_customer(name)
+        message = f"Piutang {name} {rupiah(total)} tersimpan"
+        ops.append(await log_activity("receivable", f"Piutang {name} — {rupiah(total)}"))
 
-    if intent == "receivable_payment":
+    elif intent == "receivable_payment":
         name = req.customer_name or ""
         rec = await db.receivables.find_one(
             {"customer_name": {"$regex": f"^{name}$", "$options": "i"}, "status": "belum_lunas"}
@@ -253,11 +285,13 @@ async def commit(req: CommitRequest):
         paid = rec.get("paid_amount", 0) + pay
         status = "lunas" if paid >= rec["amount"] else "belum_lunas"
         await db.receivables.update_one({"_id": rec["_id"]}, {"$set": {"paid_amount": paid, "status": status}})
-        await touch_customer(rec["customer_name"])
-        await log_activity("receivable_payment", f"{rec['customer_name']} bayar utang {rupiah(pay)}")
-        return {"ok": True, "message": f"Pembayaran {rupiah(pay)} dari {rec['customer_name']} dicatat"}
+        ops.append({"op": "set", "coll": "receivables", "id": str(rec["_id"]),
+                    "fields": {"paid_amount": rec.get("paid_amount", 0), "status": rec["status"]}})
+        ops += await touch_customer(rec["customer_name"])
+        message = f"Pembayaran {rupiah(pay)} dari {rec['customer_name']} dicatat"
+        ops.append(await log_activity("receivable_payment", f"{rec['customer_name']} bayar utang {rupiah(pay)}"))
 
-    if intent == "inventory":
+    elif intent == "inventory":
         results = []
         for it in req.items or []:
             inv = await db.inventory.find_one({"name": {"$regex": f"^{it.name}$", "$options": "i"}})
@@ -265,23 +299,167 @@ async def commit(req: CommitRequest):
                 await db.inventory.update_one(
                     {"_id": inv["_id"]}, {"$set": {"qty": it.qty, "updated_at": now_iso()}}
                 )
+                ops.append({"op": "set", "coll": "inventory", "id": str(inv["_id"]),
+                            "fields": {"qty": inv["qty"], "updated_at": inv["updated_at"]}})
             else:
-                await db.inventory.insert_one(
+                res = await db.inventory.insert_one(
                     InventoryItem(name=it.name, qty=it.qty, unit=req.inventory_unit or "pcs", min_qty=2).to_mongo()
                 )
+                ops.append({"op": "delete", "coll": "inventory", "id": str(res.inserted_id)})
             results.append(f"{it.name} {int(it.qty)}")
-        await log_activity("inventory", f"Stok diperbarui: {', '.join(results) or '-'}")
-        return {"ok": True, "message": "Stok diperbarui"}
+        message = "Stok diperbarui"
+        ops.append(await log_activity("inventory", f"Stok diperbarui: {', '.join(results) or '-'}"))
 
-    if intent == "customer":
+    elif intent == "customer":
         name = req.customer_name or "Pelanggan"
-        await touch_customer(name)
+        ops += await touch_customer(name)
         if req.note:
             await db.customers.update_one({"name": name}, {"$set": {"note": req.note}})
-        await log_activity("customer", f"Pelanggan baru: {name}")
-        return {"ok": True, "message": f"Pelanggan {name} tersimpan"}
+        message = f"Pelanggan {name} tersimpan"
+        ops.append(await log_activity("customer", f"Pelanggan baru: {name}"))
 
-    raise HTTPException(status_code=400, detail="Intent ini tidak bisa disimpan")
+    else:
+        raise HTTPException(status_code=400, detail="Intent ini tidak bisa disimpan")
+
+    history_id = await record_history(intent, message, req.raw_text, ops)
+    return {"ok": True, "message": message, "history_id": history_id}
+
+
+@api_router.get("/history")
+async def history():
+    docs = await db.history.find({}).sort("created_at", -1).to_list(50)
+    return {"history": strip_ids(docs)}
+
+
+@api_router.post("/history/{hid}/undo")
+async def undo_history(hid: str):
+    try:
+        h = await db.history.find_one({"_id": ObjectId(hid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="ID riwayat tidak valid")
+    if not h:
+        raise HTTPException(status_code=404, detail="Riwayat tidak ditemukan")
+    if h.get("reverted"):
+        raise HTTPException(status_code=400, detail="Catatan ini sudah dibatalkan")
+    for op in reversed(h.get("ops", [])):
+        if op["op"] == "delete":
+            await db[op["coll"]].delete_one({"_id": ObjectId(op["id"])})
+        elif op["op"] == "set":
+            await db[op["coll"]].update_one({"_id": ObjectId(op["id"])}, {"$set": op["fields"]})
+    await db.history.update_one({"_id": h["_id"]}, {"$set": {"reverted": True, "reverted_at": now_iso()}})
+    return {"ok": True, "message": f"Dibatalkan: {h['message']}"}
+
+
+@api_router.get("/receivables/reminders")
+async def receivable_reminders():
+    receivables = await db.receivables.find({"status": {"$ne": "lunas"}}).sort("created_at", 1).to_list(50)
+    if not receivables:
+        return {"reminders": []}
+    customers = await db.customers.find({}, {"_id": 0}).to_list(200)
+    phones = {c["name"].lower(): c.get("phone") for c in customers}
+    payload = [
+        {
+            "customer_name": r["customer_name"],
+            "remaining": r["amount"] - r.get("paid_amount", 0),
+            "days_ago": (datetime.now(timezone.utc) - datetime.fromisoformat(r["created_at"])).days,
+            "note": r.get("note"),
+        }
+        for r in receivables
+    ]
+    try:
+        messages = await nlu.generate_reminders(payload)
+    except Exception as e:
+        logger.exception("reminders failed")
+        raise HTTPException(status_code=500, detail=f"Gagal membuat pesan penagihan: {e}")
+
+    by_name = {m.get("customer_name", "").lower(): m.get("message", "") for m in messages}
+    out = []
+    for r, p in zip(receivables, payload):
+        msg = by_name.get(r["customer_name"].lower()) or (
+            f"Selamat pagi {r['customer_name']}, mohon izin mengingatkan sisa pembayaran "
+            f"{rupiah(p['remaining'])}. Terima kasih banyak 🙏"
+        )
+        phone = phones.get(r["customer_name"].lower())
+        out.append({
+            "id": str(r["_id"]),
+            "customer_name": r["customer_name"],
+            "remaining": p["remaining"],
+            "days_ago": p["days_ago"],
+            "phone": phone,
+            "message": msg,
+            "wa_link": wa_link(phone, msg),
+        })
+    return {"reminders": out}
+
+
+@api_router.get("/reports/weekly")
+async def weekly_report():
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=6)
+    sales = await db.sales.find({}, {"_id": 0}).to_list(2000)
+    expenses = await db.expenses.find({}, {"_id": 0}).to_list(2000)
+    receivables = await db.receivables.find({}, {"_id": 0}).to_list(2000)
+
+    def d(x):
+        return datetime.fromisoformat(x["created_at"]).date()
+
+    week_sales = [s for s in sales if start <= d(s) <= today]
+    week_expenses = [e for e in expenses if start <= d(e) <= today]
+    revenue = sum(s["total"] for s in week_sales)
+    expense = sum(e["total"] for e in week_expenses)
+
+    per_item: dict[str, dict] = {}
+    for s in week_sales:
+        for it in s.get("items", []):
+            row = per_item.setdefault(it["name"], {"name": it["name"], "qty": 0, "revenue": 0})
+            row["qty"] += it.get("qty") or 0
+            row["revenue"] += it.get("subtotal") or (it.get("qty") or 1) * (it.get("unit_price") or 0)
+    top_items = sorted(per_item.values(), key=lambda x: x["revenue"], reverse=True)[:3]
+
+    per_day = {}
+    for s in week_sales:
+        per_day[str(d(s))] = per_day.get(str(d(s)), 0) + s["total"]
+    best_day = max(per_day.items(), key=lambda x: x[1]) if per_day else None
+    outstanding = sum(r["amount"] - r.get("paid_amount", 0) for r in receivables if r["status"] != "lunas")
+
+    bulan = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+
+    def id_date(dt):
+        return f"{dt.day} {bulan[dt.month - 1]}"
+
+    data = {
+        "period": f"{id_date(start)} – {id_date(today)} {today.year}",
+        "revenue": revenue,
+        "expense": expense,
+        "profit": revenue - expense,
+        "transactions": len(week_sales),
+        "avg_per_day": round(revenue / 7),
+        "top_items": top_items,
+        "best_day": {"date": best_day[0], "revenue": best_day[1]} if best_day else None,
+        "outstanding_receivables": outstanding,
+    }
+    try:
+        data["narrative"] = await nlu.generate_weekly(data)
+    except Exception as e:
+        logger.exception("weekly report failed")
+        raise HTTPException(status_code=500, detail=f"Gagal membuat laporan: {e}")
+
+    lines = [
+        f"*Laporan VoiceBiz* ({data['period']})",
+        f"Pemasukan: {rupiah(revenue)}",
+        f"Pengeluaran: {rupiah(expense)}",
+        f"Laba: {rupiah(data['profit'])}",
+        f"Transaksi: {len(week_sales)} · Rata-rata/hari: {rupiah(data['avg_per_day'])}",
+    ]
+    if top_items:
+        lines.append("Terlaris: " + ", ".join(f"{t['name']} ({int(t['qty'])})" for t in top_items))
+    if outstanding:
+        lines.append(f"Piutang belum tertagih: {rupiah(outstanding)}")
+    lines.append("")
+    lines.append(data["narrative"])
+    data["share_text"] = "\n".join(lines)
+    data["share_link"] = "https://wa.me/?text=" + quote(data["share_text"])
+    return data
 
 
 # ---------- Business data ----------
@@ -371,7 +549,7 @@ async def dashboard():
     elif rev_today > rev_yesterday and rev_yesterday:
         insights.append({
             "type": "good", "icon": "trending-up",
-            "title": f"Penjualan naik dari kemarin",
+            "title": "Penjualan naik dari kemarin",
             "body": f"Hari ini {rupiah(rev_today)} vs kemarin {rupiah(rev_yesterday)}.",
             "action": "Siapkan stok bahan favorit agar tidak kehabisan besok.",
         })
@@ -444,7 +622,7 @@ async def memory():
 
 @api_router.post("/demo/reset")
 async def reset_demo():
-    for coll in ["sales", "expenses", "customers", "receivables", "inventory", "activities"]:
+    for coll in ["sales", "expenses", "customers", "receivables", "inventory", "activities", "history"]:
         await db[coll].delete_many({})
     await ensure_seed()
     return {"ok": True, "message": "Data demo dimuat ulang"}

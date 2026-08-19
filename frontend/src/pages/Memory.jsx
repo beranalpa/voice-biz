@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Boxes, HandCoins, Receipt, ShoppingBasket, Users } from "lucide-react";
+import { Boxes, HandCoins, MessageCircle, Receipt, ShoppingBasket, Users } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { ReminderSheet } from "../components/ReminderSheet";
 import { getMemory, rupiah } from "../lib/api";
 
 const fmtDate = (iso) =>
@@ -18,6 +19,7 @@ const Row = ({ title, subtitle, right, tone = "text-forest", testid }) => (
 
 export default function Memory({ refreshKey }) {
   const [data, setData] = useState(null);
+  const [reminderOpen, setReminderOpen] = useState(false);
 
   useEffect(() => {
     getMemory().then(setData).catch(() => {});
@@ -81,6 +83,21 @@ export default function Memory({ refreshKey }) {
         </TabsContent>
 
         <TabsContent value="receivables" className="mt-4 space-y-3">
+          {data.receivables.some((r) => r.status !== "lunas") && (
+            <button
+              data-testid="open-reminder-btn"
+              onClick={() => setReminderOpen(true)}
+              className="flex w-full items-center justify-between rounded-2xl bg-forest px-5 py-4 text-sand shadow-floating transition-transform active:scale-[0.98]"
+            >
+              <span className="text-left">
+                <span className="block font-display text-sm font-bold">Tagih via WhatsApp</span>
+                <span className="block text-xs text-sand/70">
+                  Pesan sopan dibuat AI untuk {data.receivables.filter((r) => r.status !== "lunas").length} pelanggan
+                </span>
+              </span>
+              <MessageCircle className="h-5 w-5" strokeWidth={2.5} />
+            </button>
+          )}
           {data.receivables.map((r, i) => (
             <Row
               key={r.id}
@@ -119,6 +136,8 @@ export default function Memory({ refreshKey }) {
           ))}
         </TabsContent>
       </Tabs>
+
+      {reminderOpen && <ReminderSheet onClose={() => setReminderOpen(false)} />}
     </div>
   );
 }

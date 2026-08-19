@@ -8,6 +8,10 @@ export const getBrief = () => axios.get(`${API}/brief`).then((r) => r.data);
 export const parseText = (text) => axios.post(`${API}/nlu/parse`, { text }).then((r) => r.data);
 export const commitDraft = (draft) => axios.post(`${API}/nlu/commit`, draft).then((r) => r.data);
 export const resetDemo = () => axios.post(`${API}/demo/reset`).then((r) => r.data);
+export const getHistory = () => axios.get(`${API}/history`).then((r) => r.data);
+export const undoHistory = (id) => axios.post(`${API}/history/${id}/undo`).then((r) => r.data);
+export const getReminders = () => axios.get(`${API}/receivables/reminders`).then((r) => r.data);
+export const getWeekly = () => axios.get(`${API}/reports/weekly`).then((r) => r.data);
 
 export const transcribe = (blob) => {
   const fd = new FormData();

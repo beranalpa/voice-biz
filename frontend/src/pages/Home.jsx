@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { StatCards } from "../components/StatCards";
+import { HistoryFeed } from "../components/HistoryFeed";
 import { TrendChart } from "../components/TrendChart";
 import { InsightList } from "../components/InsightList";
 import { TalkPanel } from "../components/TalkPanel";
@@ -9,8 +10,10 @@ import { getBrief, getDashboard } from "../lib/api";
 
 const fmtTime = (iso) =>
   new Date(iso).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+// eslint-disable-next-line no-unused-vars
+const _unused = fmtTime;
 
-export default function Home({ refreshKey, onDraft }) {
+export default function Home({ refreshKey, onDraft, onChanged }) {
   const [data, setData] = useState(null);
   const [brief, setBrief] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
@@ -61,18 +64,7 @@ export default function Home({ refreshKey, onDraft }) {
       {data && <InsightList insights={data.insights} />}
       {data && <TrendChart trend={data.trend} />}
 
-      <section className="space-y-3" data-testid="activity-feed">
-        <h3 className="font-display text-base font-bold text-ink">Aktivitas terbaru</h3>
-        {(data?.activities || []).map((a, i) => (
-          <div key={a.id} className="flex items-start gap-3 rounded-2xl border border-hairline bg-white p-4 shadow-card">
-            <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-forest" />
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-ink">{a.text}</p>
-              <p className="text-xs text-mutedink">{fmtTime(a.created_at)}</p>
-            </div>
-          </div>
-        ))}
-      </section>
+      <HistoryFeed refreshKey={refreshKey} onChanged={onChanged} />
     </div>
   );
 }

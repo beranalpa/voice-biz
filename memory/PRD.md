@@ -15,8 +15,7 @@ Bangun web app full-stack "VoiceBiz": asisten bisnis AI untuk pemilik usaha mikr
 - Frontend: React (CRA) mobile container max-w-md, Tailwind custom palette, shadcn UI, sonner toast
 - Endpoint: `POST /api/voice/transcribe`, `POST /api/nlu/parse`, `POST /api/nlu/commit`, `GET /api/dashboard`, `GET /api/memory`, `GET /api/brief`, `POST /api/demo/reset`
 
-## Sudah diimplementasikan (2026-06)
-- Tap to Talk: rekam mic (MediaRecorder) → Whisper → NLU; fallback input teks + contoh chip
+## Sudah diimplementasikan (2026-06)- Tap to Talk: rekam mic (MediaRecorder) → Whisper → NLU; fallback input teks + contoh chip
 - Confirmation sheet: judul intent, item, total, tombol Simpan/Edit (edit total & nama pelanggan)
 - Intent didukung: sale, expense, receivable, receivable_payment, inventory, customer, question
 - Business Memory: 5 tab (Jual, Biaya, Piutang, Stok, Pelanggan) dari data nyata
@@ -27,10 +26,14 @@ Bangun web app full-stack "VoiceBiz": asisten bisnis AI untuk pemilik usaha mikr
 - Data demo warung Indonesia + tombol reset demo
 - Testing agent: backend 12/12 PASS, frontend semua alur inti PASS
 
+### Iterasi 2 (2026-06)
+- **Riwayat & Undo**: setiap commit tercatat di koleksi `history` beserta operasi balikan (`ops`); `POST /api/history/{id}/undo` mengembalikan stok, piutang, penjualan, pengeluaran, pelanggan, dan aktivitas ke kondisi sebelumnya. Feed riwayat percakapan di Beranda dengan tombol Batalkan.
+- **Tagih via WhatsApp**: `GET /api/receivables/reminders` membuat pesan penagihan sopan (LLM) per pelanggan yang masih berutang + `wa.me` deep link; UI sheet di tab Piutang (Kirim WhatsApp / Salin).
+- **Laporan Mingguan**: `GET /api/reports/weekly` (omzet, biaya, laba, rata-rata/hari, menu terlaris, hari terbaik, piutang, narasi LLM, `share_text` + `share_link`); tab Laporan dengan tombol Bagikan & Salin.
+- **Mode Demo Juri**: tur 7 babak sekali klik (tombol "Demo" di header) yang memainkan perintah suara paling mengesankan, menyimpan otomatis, mendemokan Undo, pesan penagihan WhatsApp, laporan mingguan, lalu jawaban laba dari data nyata. Bisa dijeda/lanjut manual, dan reset data demo di awal.
+
 ## Backlog
 ### P0
-- Riwayat percakapan (chat log) tersimpan agar pengguna bisa lihat ulang perintah
-- Koreksi/hapus transaksi salah dari Memori
 ### P1
 - Multi-item edit di confirmation sheet (ubah qty/harga per item)
 - Laporan mingguan/bulanan + ekspor WhatsApp/PDF

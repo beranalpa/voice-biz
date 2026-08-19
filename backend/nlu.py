@@ -80,6 +80,29 @@ async def answer_question(question: str, context: dict) -> str:
     return resp if isinstance(resp, str) else str(resp)
 
 
+async def generate_reminders(receivables: list) -> list:
+    chat = _chat(
+        "Kamu membantu pemilik warung Indonesia menagih utang pelanggan dengan sopan dan menjaga hubungan baik.\n"
+        "Untuk setiap pelanggan, tulis satu pesan WhatsApp Bahasa Indonesia: ramah, hormat, maksimal 2 kalimat, "
+        "sebut nominal dengan format Rp150.000, sertakan sapaan sesuai nama, boleh 1 emoji 🙏, jangan mengancam, "
+        "dan tawarkan opsi bayar bertahap kalau utang sudah lebih dari 7 hari.\n"
+        'Balas HANYA JSON: {"reminders":[{"customer_name":"...","message":"..."}]}'
+    )
+    resp = await chat.send_message(UserMessage(text=json.dumps(receivables, ensure_ascii=False)))
+    data = _extract_json(resp if isinstance(resp, str) else str(resp))
+    return data.get("reminders", [])
+
+
+async def generate_weekly(report: dict) -> str:
+    chat = _chat(
+        "Kamu penasihat bisnis VoiceBiz. Dari data laporan mingguan JSON, tulis ringkasan Bahasa Indonesia "
+        "yang mudah dipahami keluarga atau pemberi modal: maksimal 3 kalimat, sebut angka Rupiah format Rp1.234.000, "
+        "sebut menu terlaris, dan tutup dengan satu rekomendasi untuk minggu depan. Tanpa markdown."
+    )
+    resp = await chat.send_message(UserMessage(text=json.dumps(report, ensure_ascii=False, default=str)))
+    return resp if isinstance(resp, str) else str(resp)
+
+
 async def generate_advice(context: dict) -> str:
     chat = _chat(
         "Kamu penasihat bisnis VoiceBiz. Berdasarkan data JSON, tulis 1 paragraf briefing harian "
