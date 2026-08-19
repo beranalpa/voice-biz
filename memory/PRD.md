@@ -38,6 +38,12 @@ Bangun web app full-stack "VoiceBiz": asisten bisnis AI untuk pemilik usaha mikr
 - **Laporan Bulanan**: `GET /api/reports/weekly?period=weekly|monthly` (7 vs 30 hari, rata-rata per hari mengikuti periode, judul share text menyesuaikan); toggle "7 hari / 30 hari" di tab Laporan.
 - **Koreksi Lewat Suara**: intent `correction` di NLU ("salah, itu 50 ribu"); `POST /api/nlu/correct` membatalkan catatan terakhir (pakai `draft` yang tersimpan di history) lalu mencatat ulang dengan nilai/nama/item yang benar, tercatat sebagai "Dikoreksi → …". Tersedia sebagai chip contoh di Tap to Talk dan satu babak baru di Mode Demo Juri (total 8 babak).
 
+### Iterasi 4 (2026-06)
+- **Target Otomatis**: `GET /api/settings/suggest-target` menghitung rata-rata omzet 30 hari (hari aktif) dan menyarankan target 10% di atasnya (dibulatkan Rp5.000); kartu Target menampilkan alasan + tombol "Pakai saran".
+- **Grafik Pengeluaran**: laporan mengirim `expense_breakdown` (per kategori + persentase) dan `top_expenses`; ditampilkan sebagai bar di tab Laporan ("Ke mana uang pergi") mengikuti periode 7/30 hari.
+- **Pengingat Belanja**: `GET /api/shopping-list` (bahan di bawah stok minimum + jumlah yang perlu dibeli + teks siap salin/WA) dan `POST /api/inventory/{id}/restock` yang tercatat di history sehingga bisa di-undo. Kartu "Belanja sebelum jam sibuk" di Beranda dengan tombol "Sudah beli".
+- **Catat Lewat Foto**: `POST /api/expenses/from-receipt` — foto nota di-resize (Pillow) lalu dibaca `gpt-5.6-luna` (vision, ImageContent) menjadi draft pengeluaran (item, qty, harga, total, kategori) yang muncul di kartu konfirmasi. Tombol kamera di panel Tap to Talk.
+
 ## Backlog
 ### P0
 ### P1

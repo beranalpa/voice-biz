@@ -2,7 +2,7 @@ import json
 import os
 import re
 import uuid
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
 MODEL_PROVIDER = "openai"
 MODEL_NAME = "gpt-5.6-luna"
@@ -79,6 +79,22 @@ async def answer_question(question: str, context: dict) -> str:
     payload = f"DATA BISNIS:\n{json.dumps(context, ensure_ascii=False, default=str)}\n\nPERTANYAAN: {question}"
     resp = await chat.send_message(UserMessage(text=payload))
     return resp if isinstance(resp, str) else str(resp)
+
+
+async def parse_receipt(image_b64: str) -> dict:
+    chat = _chat(
+        "Kamu membaca foto nota/struk belanja pemilik warung Indonesia (tulisan tangan atau cetak).\n"
+        "Ekstrak pengeluaran dari gambar. Balas HANYA JSON:\n"
+        '{"title":"nama toko atau ringkasan belanja","items":[{"name":"beras","qty":2,"unit_price":65000,'
+        '"subtotal":130000}],"total":195000,"category":"bahan baku"|"operasional"|"lainnya",'
+        '"note":"catatan singkat","confidence":0.0-1.0}\n'
+        "Semua nominal dalam Rupiah bulat tanpa titik. Kalau total tidak terbaca, jumlahkan subtotal item. "
+        "Kalau gambar bukan nota, balas {\"total\":0,\"items\":[],\"confidence\":0}."
+    )
+    resp = await chat.send_message(
+        UserMessage(text="Bacakan nota ini menjadi data pengeluaran.", file_contents=[ImageContent(image_base64=image_b64)])
+    )
+    return _extract_json(resp if isinstance(resp, str) else str(resp))
 
 
 async def generate_reminders(receivables: list) -> list:

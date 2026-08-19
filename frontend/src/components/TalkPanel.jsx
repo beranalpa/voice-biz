@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
-import { Loader2, Mic, Send, Square } from "lucide-react";
+import { Camera, Loader2, Mic, Send, Square } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
-import { parseText, transcribe } from "../lib/api";
+import { parseText, receiptToExpense, transcribe } from "../lib/api";
 
 const CONTOH = [
   "Hari ini saya jual dua nasi goreng dan tiga es teh, total 87 ribu",
@@ -17,6 +17,22 @@ export const TalkPanel = ({ onDraft }) => {
   const [text, setText] = useState("");
   const recorderRef = useRef(null);
   const chunksRef = useRef([]);
+  const fileRef = useRef(null);
+
+  const onReceipt = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setState("processing");
+    try {
+      const draft = await receiptToExpense(file);
+      onDraft(draft);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Gagal membaca nota");
+    } finally {
+      setState("idle");
+    }
+  };
 
   const runParse = async (value) => {
     setState("processing");
@@ -102,7 +118,7 @@ export const TalkPanel = ({ onDraft }) => {
           {state === "listening" ? "Sedang mendengar…" : busy ? "VoiceBiz sedang berpikir…" : "Tap untuk Bicara"}
         </p>
         <p className="mt-1 text-center text-xs text-mutedink">
-          Bicara santai pakai Bahasa Indonesia. Contoh: “jual 2 nasi goreng total 40 ribu”.
+          Bicara santai pakai Bahasa Indonesia, atau foto nota belanja lewat ikon kamera.
         </p>
         {state === "listening" && (
           <div className="mt-3 flex h-6 items-end gap-1">
@@ -118,6 +134,25 @@ export const TalkPanel = ({ onDraft }) => {
       </div>
 
       <div className="mt-6 flex items-center gap-2">
+        <input
+          data-testid="receipt-input"
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={onReceipt}
+          className="hidden"
+        />
+        <Button
+          data-testid="receipt-btn"
+          disabled={busy}
+          onClick={() => fileRef.current?.click()}
+          variant="outline"
+          className="h-12 w-12 shrink-0 rounded-full border-forest/25 p-0 text-forest hover:bg-forest-light"
+          title="Foto nota belanja"
+        >
+          <Camera className="h-5 w-5" strokeWidth={2.4} />
+        </Button>
         <input
           data-testid="talk-text-input"
           value={text}

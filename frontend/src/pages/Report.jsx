@@ -116,8 +116,48 @@ export default function Report({ refreshKey }) {
             ))}
           </section>
 
-          {data.best_day && (
-            <div className="flex items-center gap-3 rounded-2xl border border-hairline bg-white p-4 shadow-card">
+          <section className="space-y-3" data-testid="expense-breakdown">
+            <h3 className="font-display text-base font-bold text-ink">Ke mana uang pergi</h3>
+            {(data.expense_breakdown || []).length === 0 && (
+              <p className="text-sm text-mutedink">Belum ada pengeluaran pada periode ini.</p>
+            )}
+            {(data.expense_breakdown || []).map((c, i) => (
+              <div
+                key={c.category}
+                data-testid={`expense-cat-${i}`}
+                className="rounded-2xl border border-hairline bg-white p-4 shadow-card"
+              >
+                <div className="flex items-baseline justify-between">
+                  <p className="font-display text-sm font-bold capitalize text-ink">{c.category}</p>
+                  <p className="font-display text-sm font-extrabold text-terracotta">{rupiah(c.total)}</p>
+                </div>
+                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-terracotta transition-[width] duration-700"
+                    style={{ width: `${Math.max(3, c.pct)}%` }}
+                  />
+                </div>
+                <p className="mt-1.5 text-xs text-mutedink">{c.pct}% dari total pengeluaran</p>
+              </div>
+            ))}
+            {(data.top_expenses || []).length > 0 && (
+              <div className="rounded-2xl border border-hairline bg-white p-4 shadow-card">
+                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-mutedink">
+                  Pengeluaran terbesar
+                </p>
+                <div className="mt-2 space-y-2">
+                  {data.top_expenses.map((e, i) => (
+                    <div key={i} className="flex items-center justify-between text-sm" data-testid={`top-expense-${i}`}>
+                      <span className="text-ink">{e.title}</span>
+                      <span className="font-display font-bold text-terracotta">{rupiah(e.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {data.best_day && (            <div className="flex items-center gap-3 rounded-2xl border border-hairline bg-white p-4 shadow-card">
               <TrendingUp className="h-5 w-5 text-forest" strokeWidth={2.4} />
               <p className="text-sm text-ink">
                 Hari terbaik{" "}

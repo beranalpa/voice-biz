@@ -3,6 +3,7 @@ import { RefreshCw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { StatCards } from "../components/StatCards";
 import { TargetCard } from "../components/TargetCard";
+import { ShoppingCard } from "../components/ShoppingCard";
 import { HistoryFeed } from "../components/HistoryFeed";
 import { TrendChart } from "../components/TrendChart";
 import { InsightList } from "../components/InsightList";
@@ -42,6 +43,8 @@ export default function Home({ refreshKey, onDraft, onChanged }) {
       <StatCards data={data} />
 
       <TargetCard data={data} onChanged={onChanged} />
+
+      <ShoppingCard refreshKey={refreshKey} onChanged={onChanged} />
 
       <section className="rounded-2xl border border-forest/15 bg-forest-light p-5" data-testid="brief-card">
         <div className="flex items-center justify-between">

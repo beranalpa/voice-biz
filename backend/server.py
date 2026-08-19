@@ -1,3 +1,5 @@
+import base64
+import io
 import logging
 import os
 import re
@@ -11,6 +13,7 @@ from bson import ObjectId
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
 from motor.motor_asyncio import AsyncIOMotorClient
+from PIL import Image
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 from starlette.middleware.cors import CORSMiddleware
 
@@ -129,6 +132,10 @@ class CorrectionRequest(BaseModel):
 
 class SettingsUpdate(BaseModel):
     daily_target: Optional[float] = None
+
+
+class RestockRequest(BaseModel):
+    qty: Optional[float] = None
 
 
 async def ensure_seed():
@@ -400,6 +407,132 @@ async def correct_last(req: CorrectionRequest):
     }
 
 
+@api_router.get("/settings/suggest-target")
+async def suggest_target():
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=29)
+    sales = await db.sales.find({}, {"_id": 0}).to_list(3000)
+
+    per_day: dict[str, float] = {}
+    for s in sales:
+        day = datetime.fromisoformat(s["created_at"]).date()
+        if start <= day <= today:
+            per_day[str(day)] = per_day.get(str(day), 0) + s["total"]
+
+    active = [v for v in per_day.values() if v > 0]
+    if not active:
+        return {"suggested": 300000, "avg_30d": 0, "avg_active_day": 0, "active_days": 0,
+                "reason": "Belum ada penjualan tercatat, mulai dari target Rp300.000/hari."}
+
+    avg_30 = round(sum(active) / 30)
+    avg_active = round(sum(active) / len(active))
+    suggested = int(round(avg_active * 1.1 / 5000) * 5000)
+    return {
+        "suggested": suggested,
+        "avg_30d": avg_30,
+        "avg_active_day": avg_active,
+        "active_days": len(active),
+        "reason": (
+            f"Rata-rata {rupiah(avg_active)}/hari dari {len(active)} hari jualan terakhir. "
+            f"Target {rupiah(suggested)} = 10% di atas rata-rata, masih realistis dikejar."
+        ),
+    }
+
+
+@api_router.get("/shopping-list")
+async def shopping_list():
+    inventory = await db.inventory.find({}).sort("qty", 1).to_list(200)
+    items = []
+    for i in inventory:
+        if i["qty"] <= i["min_qty"]:
+            target = max(i["min_qty"] * 2, i["min_qty"] + 1)
+            items.append({
+                "id": str(i["_id"]),
+                "name": i["name"],
+                "qty": i["qty"],
+                "unit": i["unit"],
+                "min_qty": i["min_qty"],
+                "suggested_qty": round(target - i["qty"], 2),
+                "target_qty": target,
+            })
+    lines = ["*Belanja warung hari ini*"] + [
+        f"- {it['name']}: beli {it['suggested_qty']:g} {it['unit']} (sisa {it['qty']:g})" for it in items
+    ]
+    text = "\n".join(lines) if items else "Semua stok masih aman hari ini."
+    return {
+        "items": items,
+        "share_text": text,
+        "share_link": "https://wa.me/?text=" + quote(text),
+    }
+
+
+@api_router.post("/inventory/{iid}/restock")
+async def restock_item(iid: str, req: RestockRequest):
+    try:
+        oid = ObjectId(iid)
+    except Exception:
+        raise HTTPException(status_code=400, detail="ID stok tidak valid")
+    inv = await db.inventory.find_one({"_id": oid})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Bahan tidak ditemukan")
+    new_qty = req.qty if req.qty is not None else max(inv["min_qty"] * 2, inv["min_qty"] + 1)
+    await db.inventory.update_one({"_id": oid}, {"$set": {"qty": new_qty, "updated_at": now_iso()}})
+    ops = [{"op": "set", "coll": "inventory", "id": iid,
+            "fields": {"qty": inv["qty"], "updated_at": inv["updated_at"]}}]
+    ops.append(await log_activity("inventory", f"Belanja {inv['name']} → {new_qty:g} {inv['unit']}"))
+    message = f"{inv['name']} diperbarui jadi {new_qty:g} {inv['unit']}"
+    history_id = await record_history("inventory", message, "Tandai sudah dibeli", ops)
+    return {"ok": True, "message": message, "history_id": history_id}
+
+
+@api_router.post("/expenses/from-receipt")
+async def expense_from_receipt(image: UploadFile = File(...)):
+    content = await image.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Gambar kosong")
+    try:
+        img = Image.open(io.BytesIO(content))
+        img = img.convert("RGB")
+        img.thumbnail((1400, 1400))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=82)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Format gambar tidak didukung")
+
+    try:
+        data = await nlu.parse_receipt(b64)
+    except Exception as e:
+        logger.exception("receipt parse failed")
+        raise HTTPException(status_code=500, detail=f"Gagal membaca nota: {e}")
+
+    items = data.get("items") or []
+    total = float(data.get("total") or 0) or sum(
+        (it.get("subtotal") or (it.get("qty") or 1) * (it.get("unit_price") or 0)) for it in items
+    )
+    if total <= 0:
+        return {
+            "intent": "unknown",
+            "title": "Nota tidak terbaca",
+            "summary": "Foto tidak bisa dibaca sebagai nota belanja. Coba foto lebih terang.",
+            "items": [],
+            "total": 0,
+            "confidence": 0,
+            "raw_text": "Foto nota belanja",
+        }
+    return {
+        "intent": "expense",
+        "title": "Pengeluaran dari nota terdeteksi",
+        "summary": data.get("note") or f"{data.get('title') or 'Belanja'} — {len(items)} item",
+        "items": items,
+        "total": total,
+        "category": data.get("category") or "bahan baku",
+        "note": data.get("title") or "Belanja dari nota",
+        "confidence": data.get("confidence", 0.8),
+        "raw_text": "Foto nota belanja",
+    }
+
+
 @api_router.get("/settings")
 async def read_settings():
     doc = await get_settings_doc()
@@ -524,6 +657,15 @@ async def weekly_report(period: str = "weekly"):
     best_day = max(per_day.items(), key=lambda x: x[1]) if per_day else None
     outstanding = sum(r["amount"] - r.get("paid_amount", 0) for r in receivables if r["status"] != "lunas")
 
+    per_cat: dict[str, float] = {}
+    for e in week_expenses:
+        per_cat[e.get("category") or "lainnya"] = per_cat.get(e.get("category") or "lainnya", 0) + e["total"]
+    breakdown = [
+        {"category": k, "total": v, "pct": round(v / expense * 100) if expense else 0}
+        for k, v in sorted(per_cat.items(), key=lambda x: x[1], reverse=True)
+    ]
+    top_expenses = sorted(week_expenses, key=lambda x: x["total"], reverse=True)[:3]
+
     bulan = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 
     def id_date(dt):
@@ -541,6 +683,8 @@ async def weekly_report(period: str = "weekly"):
         "top_items": top_items,
         "best_day": {"date": best_day[0], "revenue": best_day[1]} if best_day else None,
         "outstanding_receivables": outstanding,
+        "expense_breakdown": breakdown,
+        "top_expenses": [{"title": e["title"], "total": e["total"], "category": e.get("category")} for e in top_expenses],
     }
     try:
         data["narrative"] = await nlu.generate_weekly(data)
