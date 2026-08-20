@@ -3,6 +3,7 @@ import { CalendarRange, Copy, Loader2, Share2, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
 import { getWeekly, rupiah } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 
 export default function Report({ refreshKey }) {
   const [data, setData] = useState(null);
@@ -21,8 +22,7 @@ export default function Report({ refreshKey }) {
   useEffect(load, [refreshKey, period]);
 
   const copy = async () => {
-    await navigator.clipboard.writeText(data.share_text);
-    toast.success("Ringkasan disalin, siap ditempel di WhatsApp");
+    await copyText(data.share_text, "Ringkasan disalin, siap ditempel di WhatsApp");
   };
 
   return (

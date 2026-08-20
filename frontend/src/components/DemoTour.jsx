@@ -110,13 +110,17 @@ export const DemoTour = ({ onClose, onChanged, onNavigate }) => {
   const tokenRef = useRef(0);
   const autoRef = useRef(true);
   const audioRef = useRef(null);
+  const resetRef = useRef(false);
 
   useEffect(() => {
     autoRef.current = auto;
   }, [auto]);
 
   useEffect(() => {
-    resetDemo().then(onChanged).catch(() => {});
+    if (!resetRef.current) {
+      resetRef.current = true;
+      resetDemo().then(onChanged).catch(() => {});
+    }
     return () => {
       tokenRef.current += 1;
       audioRef.current?.pause();

@@ -2,7 +2,7 @@ import random
 from datetime import datetime, timezone, timedelta
 
 
-def _iso(days_ago=0, hour=10):
+def _iso(days_ago: int = 0, hour: int = 10) -> str:
     d = datetime.now(timezone.utc) - timedelta(days=days_ago)
     return d.replace(hour=hour % 24, minute=15, second=0, microsecond=0).isoformat()
 
@@ -26,13 +26,13 @@ BAHAN = [
 ]
 
 
-def demo_data():
+def demo_data() -> dict:
     rnd = random.Random(7)
     sales = []
     expenses = []
 
-    # 20 hari riwayat agar tren, perbandingan periode, dan riwayat belanja terasa hidup
-    for days_ago in range(20, -1, -1):
+    # 60 hari riwayat agar tren, perbandingan periode (7 & 30 hari), dan riwayat belanja terasa hidup
+    for days_ago in range(59, -1, -1):
         weekend = (datetime.now(timezone.utc) - timedelta(days=days_ago)).weekday() >= 5
         n_trx = rnd.randint(2, 4) if weekend else rnd.randint(1, 3)
         if days_ago == 0:

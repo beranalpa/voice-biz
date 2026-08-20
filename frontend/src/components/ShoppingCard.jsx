@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy, ShoppingBasket, Sun } from "lucide-react";
 import { toast } from "sonner";
 import { getShoppingList, restockItem } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 
 export const ShoppingCard = ({ refreshKey, onChanged }) => {
   const [data, setData] = useState(null);
@@ -29,8 +30,7 @@ export const ShoppingCard = ({ refreshKey, onChanged }) => {
   };
 
   const copy = async () => {
-    await navigator.clipboard.writeText(data.share_text);
-    toast.success("Daftar belanja disalin");
+    await copyText(data.share_text, "Daftar belanja disalin");
   };
 
   return (

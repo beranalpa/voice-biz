@@ -3,6 +3,7 @@ import { Copy, Loader2, MessageCircle, X, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import { getReminders, markReminded, rupiah } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 
 export const ReminderSheet = ({ onClose }) => {
   const [reminders, setReminders] = useState(null);
@@ -32,9 +33,8 @@ export const ReminderSheet = ({ onClose }) => {
   };
 
   const copy = async () => {
-    await navigator.clipboard.writeText(current.message);
-    await flagReminded();
-    toast.success("Pesan disalin & ditandai sudah ditagih");
+    const ok = await copyText(current.message, "Pesan disalin & ditandai sudah ditagih");
+    if (ok) await flagReminded();
   };
 
   const send = async () => {

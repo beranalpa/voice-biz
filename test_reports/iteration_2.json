@@ -1,0 +1,39 @@
+{
+  "summary": "Post-refactor regression run. Backend: rewrote /app/backend/tests/backend_test.py into a comprehensive pytest suite (24 tests) covering every commit intent + undo, correction, dashboard/insights, weekly+monthly reports, purchases history, reminders, shopping list/restock, settings/suggest-target, brief + TTS cache, receipt vision, demo reset and error paths — 24/24 pass. Frontend (390x844 mobile): Home (talk panel, stats, target, shopping, brief, insights, trend, history+undo), chip-0 save (revenue 104k->191k), correction chip (hint + 'Perbaiki', 191k->201k i.e. 87k replaced by 97k), undo (201k->104k), Memori 6 tabs incl. Belanja purchase rows with negotiation hint, Piutang -> reminder sheet with AI message + Kirim WhatsApp, Laporan 7/30 hari toggle with comparison + breakdown + top items, and Mode Demo Juri progressing babak 2->6 automatically. Two frontend defects found (demo-mode duplicates the whole dataset; unguarded clipboard writes crash into the CRA error overlay).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/reports/weekly?period=monthly", "issue": "comparison.revenue_delta/expense_delta/profit_delta are null because the 20-day seed has no data in the previous 30-day window, so share_text has no comparison line. Behaviour is correct but monthly comparison is effectively dead in the demo — consider seeding ~45-60 days or labelling 'belum ada data pembanding'."},
+      {"endpoint": "POST /api/demo/reset + startup ensure_seed", "issue": "ensure_seed() uses a non-atomic count-then-insert; two overlapping resets seed the dataset twice (see frontend HIGH issue). Needs an asyncio lock / idempotency guard (e.g. unique seed marker doc) so a duplicate call cannot double-insert."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Report.jsx / ShoppingCard.jsx / ReminderSheet.jsx", "issue": "navigator.clipboard.writeText() is awaited without try/catch. When clipboard permission is denied (headless browser, iOS Safari, non-secure context) the rejection is unhandled and CRA shows a full-screen 'Uncaught runtime errors: NotAllowedError ... Write permission denied' overlay that blocks the whole app. Reproduced by clicking report-copy-btn and shopping-copy-btn.", "selector": "[data-testid='report-copy-btn'], [data-testid='shopping-copy-btn'], [data-testid='reminder-copy-btn']", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Mode Demo Juri startup", "issue": "Opening the Demo tour DOUBLES the entire demo dataset: sales 49->99, expenses 8->16, customers 4->8, receivables 3->6, inventory 6->12 (reproduced deterministically; backend log prints 'Demo data seeded' twice). Cause: DemoTour.jsx:119 calls resetDemo() inside an effect that React StrictMode invokes twice, and server ensure_seed()'s count-then-insert races, so both calls insert a full copy. Visible symptoms: duplicate inventory rows on Stok, duplicate/identical reminder cards in babak 6 (same Pak Budi twice instead of Pak Budi + Mbak Rina), doubled revenue/report numbers. Fix on both sides: guard the effect (useRef/once) AND make seeding atomic/idempotent.", "affected_selectors": ["[data-testid='demo-tour-btn']", "[data-testid='demo-reminders']", "[data-testid='memory-tab-inventory']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Guard DemoTour's resetDemo() effect against StrictMode double-invocation and make backend ensure_seed()/demo reset idempotent (lock or seed-marker) — demo mode currently corrupts the dataset it is meant to showcase.",
+    "Wrap all navigator.clipboard.writeText calls (Report.jsx:24, ShoppingCard.jsx:32, ReminderSheet.jsx:35) in try/catch with a toast fallback so denied clipboard permission cannot surface the runtime-error overlay.",
+    "Optional: extend seed to >30 days (or show 'belum ada pembanding') so the monthly report comparison deltas are not null."
+  ],
+  "critical_code_review_comments": [
+    "ensure_seed(): 'if count_documents == 0: insert_many' is a check-then-act race; two concurrent /api/demo/reset calls each insert a full dataset. Use an asyncio.Lock plus an upsert-guard doc in a 'meta' collection.",
+    "revert_ops() blindly replays stored ops; it does not verify the doc still exists/was not changed since. Acceptable for a demo, but an undo after a later edit can silently restore stale values.",
+    "server.py is 1104 lines — reports/purchases/nlu-commit blocks are good candidates for separate routers now that handlers are already extracted.",
+    "Refactor itself is behaviour-preserving: sales use _adjust_inventory(create_missing=False) (verified no inventory doc created for menu names), expense add_to_inventory creates/increments, inventory commit sets absolute qty, and every undo restored exact prior values."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (24/24)", "frontend": "~90% (all flows work; 2 defects: demo-mode data duplication, clipboard crash overlay)"},
+  "seed_data_creation": "Used /api/demo/reset before and after the suite; transient TEST_-prefixed customers/receivables/inventory items were created and all undone/removed. Final state: clean 20-day demo dataset (sales 49, receivables 3, inventory 6).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "None required (no auth). /app/memory/test_credentials.md exists but is not needed for this app.",
+  "context_for_next_testing_agent": "backend_test.py is a single pytest module (loadscope => one xdist worker) and mutates shared demo state sequentially — keep it as one module and do not split into classes. It resets demo data at module start and end. Frontend must be tested at 390x844. brief-refresh-btn works fine when scrolled into view and clicked normally (no force click needed) — the earlier 'tab flipped to Memori' report did not reproduce. After fixes, re-verify: (1) opening Demo tour keeps counts identical (sales 49 / receivables 3 / inventory 6 after reset), (2) copy buttons show a toast instead of the CRA error overlay.",
+  "rca_of_the_issue": "Demo duplication: DemoTour.jsx line 119 fires resetDemo() in a mount effect; React 18 StrictMode runs mount effects twice in dev, so two /api/demo/reset requests overlap. Server reset deletes collections then calls ensure_seed(), whose 'sales count == 0' check is evaluated by both requests before either insert_many completes, so demo_data() is inserted twice. Clipboard crash: async copy handlers await navigator.clipboard.writeText without try/catch; a NotAllowedError becomes an unhandled promise rejection that react-error-overlay renders full-screen."
+}

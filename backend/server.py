@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import io
@@ -142,12 +143,17 @@ class RestockRequest(BaseModel):
     qty: Optional[float] = None
 
 
-async def ensure_seed():
-    if await db.sales.count_documents({}) == 0:
-        data = demo_data()
-        for coll, docs in data.items():
-            await db[coll].insert_many(docs)
-        logger.info("Demo data seeded")
+_seed_lock = asyncio.Lock()
+_reset_lock = asyncio.Lock()
+
+
+async def ensure_seed() -> None:
+    async with _seed_lock:
+        if await db.sales.count_documents({}) == 0:
+            data = demo_data()
+            for coll, docs in data.items():
+                await db[coll].insert_many(docs)
+            logger.info("Demo data seeded")
 
 
 @app.on_event("startup")
@@ -271,119 +277,122 @@ async def parse(req: ParseRequest):
     return draft
 
 
-async def apply_commit(req: CommitRequest):
-    intent = req.intent
-    total = float(req.total or 0)
-    ops: List[dict] = []
+CommitResult = tuple[str, List[dict]]
 
-    if intent == "sale":
-        items = [i.model_dump() for i in req.items]
-        if not total:
-            total = sum((i.get("subtotal") or (i.get("qty") or 1) * (i.get("unit_price") or 0)) for i in items)
-        sale = Sale(items=req.items, total=total, customer_name=req.customer_name, note=req.note)
-        res = await db.sales.insert_one(sale.to_mongo())
-        ops.append({"op": "delete", "coll": "sales", "id": str(res.inserted_id)})
-        for it in items:
-            inv = await db.inventory.find_one({"name": {"$regex": f"^{it['name']}$", "$options": "i"}})
-            if inv:
-                await db.inventory.update_one(
-                    {"_id": inv["_id"]},
-                    {"$set": {"qty": max(0, inv["qty"] - (it.get("qty") or 1)), "updated_at": now_iso()}},
-                )
-                ops.append({"op": "set", "coll": "inventory", "id": str(inv["_id"]),
-                            "fields": {"qty": inv["qty"], "updated_at": inv["updated_at"]}})
-        ops += await touch_customer(req.customer_name)
-        label = ", ".join(f"{int(i['qty'])} {i['name']}" for i in items) or "Penjualan"
-        message = f"Penjualan {rupiah(total)} tersimpan"
-        ops.append(await log_activity("sale", f"Penjualan {label} — {rupiah(total)}"))
 
-    elif intent == "expense":
-        title = (req.items[0].name if req.items else None) or req.note or req.title or "Pengeluaran"
-        exp = Expense(title=title, total=total, category=req.category, note=req.note, items=req.items)
-        res = await db.expenses.insert_one(exp.to_mongo())
-        ops.append({"op": "delete", "coll": "expenses", "id": str(res.inserted_id)})
-        message = f"Pengeluaran {rupiah(total)} tersimpan"
-        if req.add_to_inventory:
-            added = []
-            for it in req.items:
-                inv = await db.inventory.find_one({"name": {"$regex": f"^{it.name}$", "$options": "i"}})
-                if inv:
-                    await db.inventory.update_one(
-                        {"_id": inv["_id"]},
-                        {"$set": {"qty": inv["qty"] + (it.qty or 1), "updated_at": now_iso()}},
-                    )
-                    ops.append({"op": "set", "coll": "inventory", "id": str(inv["_id"]),
-                                "fields": {"qty": inv["qty"], "updated_at": inv["updated_at"]}})
-                else:
-                    new_inv = await db.inventory.insert_one(
-                        InventoryItem(
-                            name=it.name, qty=it.qty or 1, unit=it.unit or req.inventory_unit or "pcs",
-                            min_qty=max(1, round((it.qty or 1) / 2)),
-                        ).to_mongo()
-                    )
-                    ops.append({"op": "delete", "coll": "inventory", "id": str(new_inv.inserted_id)})
-                added.append(it.name)
-            if added:
-                message += f" & stok {', '.join(added)} bertambah"
-        ops.append(await log_activity("expense", f"Pengeluaran {title} — {rupiah(total)}"))
-
-    elif intent == "receivable":
-        name = req.customer_name or "Pelanggan"
-        rec = Receivable(customer_name=name, amount=total, note=req.note)
-        res = await db.receivables.insert_one(rec.to_mongo())
-        ops.append({"op": "delete", "coll": "receivables", "id": str(res.inserted_id)})
-        ops += await touch_customer(name)
-        message = f"Piutang {name} {rupiah(total)} tersimpan"
-        ops.append(await log_activity("receivable", f"Piutang {name} — {rupiah(total)}"))
-
-    elif intent == "receivable_payment":
-        name = req.customer_name or ""
-        rec = await db.receivables.find_one(
-            {"customer_name": {"$regex": f"^{name}$", "$options": "i"}, "status": "belum_lunas"}
+async def _adjust_inventory(name: str, delta: float, unit: Optional[str] = None,
+                            absolute: Optional[float] = None, create_missing: bool = True) -> List[dict]:
+    inv = await db.inventory.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}})
+    if inv:
+        new_qty = absolute if absolute is not None else max(0, inv["qty"] + delta)
+        await db.inventory.update_one(
+            {"_id": inv["_id"]}, {"$set": {"qty": new_qty, "updated_at": now_iso()}}
         )
-        if not rec:
-            raise HTTPException(status_code=404, detail=f"Piutang untuk {name or 'pelanggan'} tidak ditemukan")
-        pay = total or (rec["amount"] - rec.get("paid_amount", 0))
-        paid = rec.get("paid_amount", 0) + pay
-        status = "lunas" if paid >= rec["amount"] else "belum_lunas"
-        await db.receivables.update_one({"_id": rec["_id"]}, {"$set": {"paid_amount": paid, "status": status}})
-        ops.append({"op": "set", "coll": "receivables", "id": str(rec["_id"]),
-                    "fields": {"paid_amount": rec.get("paid_amount", 0), "status": rec["status"]}})
-        ops += await touch_customer(rec["customer_name"])
-        message = f"Pembayaran {rupiah(pay)} dari {rec['customer_name']} dicatat"
-        ops.append(await log_activity("receivable_payment", f"{rec['customer_name']} bayar utang {rupiah(pay)}"))
+        return [{"op": "set", "coll": "inventory", "id": str(inv["_id"]),
+                 "fields": {"qty": inv["qty"], "updated_at": inv["updated_at"]}}]
+    if not create_missing:
+        return []
+    qty = absolute if absolute is not None else max(0, delta)
+    res = await db.inventory.insert_one(
+        InventoryItem(name=name, qty=qty, unit=unit or "pcs", min_qty=max(1, round(qty / 2))).to_mongo()
+    )
+    return [{"op": "delete", "coll": "inventory", "id": str(res.inserted_id)}]
 
-    elif intent == "inventory":
-        results = []
-        for it in req.items or []:
-            inv = await db.inventory.find_one({"name": {"$regex": f"^{it.name}$", "$options": "i"}})
-            if inv:
-                await db.inventory.update_one(
-                    {"_id": inv["_id"]}, {"$set": {"qty": it.qty, "updated_at": now_iso()}}
-                )
-                ops.append({"op": "set", "coll": "inventory", "id": str(inv["_id"]),
-                            "fields": {"qty": inv["qty"], "updated_at": inv["updated_at"]}})
-            else:
-                res = await db.inventory.insert_one(
-                    InventoryItem(name=it.name, qty=it.qty, unit=req.inventory_unit or "pcs", min_qty=2).to_mongo()
-                )
-                ops.append({"op": "delete", "coll": "inventory", "id": str(res.inserted_id)})
-            results.append(f"{it.name} {int(it.qty)}")
-        message = "Stok diperbarui"
-        ops.append(await log_activity("inventory", f"Stok diperbarui: {', '.join(results) or '-'}"))
 
-    elif intent == "customer":
-        name = req.customer_name or "Pelanggan"
-        ops += await touch_customer(name)
-        if req.note:
-            await db.customers.update_one({"name": name}, {"$set": {"note": req.note}})
-        message = f"Pelanggan {name} tersimpan"
-        ops.append(await log_activity("customer", f"Pelanggan baru: {name}"))
+async def _commit_sale(req: CommitRequest, total: float) -> CommitResult:
+    items = [i.model_dump() for i in req.items]
+    if not total:
+        total = sum((i.get("subtotal") or (i.get("qty") or 1) * (i.get("unit_price") or 0)) for i in items)
+    res = await db.sales.insert_one(
+        Sale(items=req.items, total=total, customer_name=req.customer_name, note=req.note).to_mongo()
+    )
+    ops: List[dict] = [{"op": "delete", "coll": "sales", "id": str(res.inserted_id)}]
+    for it in items:
+        ops += await _adjust_inventory(it["name"], -(it.get("qty") or 1), create_missing=False)
+    ops += await touch_customer(req.customer_name)
+    label = ", ".join(f"{int(i['qty'])} {i['name']}" for i in items) or "Penjualan"
+    ops.append(await log_activity("sale", f"Penjualan {label} — {rupiah(total)}"))
+    return f"Penjualan {rupiah(total)} tersimpan", ops
 
-    else:
-        raise HTTPException(status_code=400, detail="Intent ini tidak bisa disimpan")
 
+async def _commit_expense(req: CommitRequest, total: float) -> CommitResult:
+    title = (req.items[0].name if req.items else None) or req.note or req.title or "Pengeluaran"
+    res = await db.expenses.insert_one(
+        Expense(title=title, total=total, category=req.category, note=req.note, items=req.items).to_mongo()
+    )
+    ops: List[dict] = [{"op": "delete", "coll": "expenses", "id": str(res.inserted_id)}]
+    message = f"Pengeluaran {rupiah(total)} tersimpan"
+    if req.add_to_inventory and req.items:
+        for it in req.items:
+            ops += await _adjust_inventory(it.name, it.qty or 1, it.unit or req.inventory_unit)
+        message += f" & stok {', '.join(it.name for it in req.items)} bertambah"
+    ops.append(await log_activity("expense", f"Pengeluaran {title} — {rupiah(total)}"))
     return message, ops
+
+
+async def _commit_receivable(req: CommitRequest, total: float) -> CommitResult:
+    name = req.customer_name or "Pelanggan"
+    res = await db.receivables.insert_one(
+        Receivable(customer_name=name, amount=total, note=req.note).to_mongo()
+    )
+    ops: List[dict] = [{"op": "delete", "coll": "receivables", "id": str(res.inserted_id)}]
+    ops += await touch_customer(name)
+    ops.append(await log_activity("receivable", f"Piutang {name} — {rupiah(total)}"))
+    return f"Piutang {name} {rupiah(total)} tersimpan", ops
+
+
+async def _commit_receivable_payment(req: CommitRequest, total: float) -> CommitResult:
+    name = req.customer_name or ""
+    rec = await db.receivables.find_one(
+        {"customer_name": {"$regex": f"^{name}$", "$options": "i"}, "status": "belum_lunas"}
+    )
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"Piutang untuk {name or 'pelanggan'} tidak ditemukan")
+    pay = total or (rec["amount"] - rec.get("paid_amount", 0))
+    paid = rec.get("paid_amount", 0) + pay
+    status = "lunas" if paid >= rec["amount"] else "belum_lunas"
+    await db.receivables.update_one({"_id": rec["_id"]}, {"$set": {"paid_amount": paid, "status": status}})
+    ops: List[dict] = [{"op": "set", "coll": "receivables", "id": str(rec["_id"]),
+                        "fields": {"paid_amount": rec.get("paid_amount", 0), "status": rec["status"]}}]
+    ops += await touch_customer(rec["customer_name"])
+    ops.append(await log_activity("receivable_payment", f"{rec['customer_name']} bayar utang {rupiah(pay)}"))
+    return f"Pembayaran {rupiah(pay)} dari {rec['customer_name']} dicatat", ops
+
+
+async def _commit_inventory(req: CommitRequest, total: float) -> CommitResult:
+    ops: List[dict] = []
+    results = []
+    for it in req.items or []:
+        ops += await _adjust_inventory(it.name, 0, it.unit or req.inventory_unit, absolute=it.qty)
+        results.append(f"{it.name} {int(it.qty)}")
+    ops.append(await log_activity("inventory", f"Stok diperbarui: {', '.join(results) or '-'}"))
+    return "Stok diperbarui", ops
+
+
+async def _commit_customer(req: CommitRequest, total: float) -> CommitResult:
+    name = req.customer_name or "Pelanggan"
+    ops: List[dict] = await touch_customer(name)
+    if req.note:
+        await db.customers.update_one({"name": name}, {"$set": {"note": req.note}})
+    ops.append(await log_activity("customer", f"Pelanggan baru: {name}"))
+    return f"Pelanggan {name} tersimpan", ops
+
+
+COMMIT_HANDLERS = {
+    "sale": _commit_sale,
+    "expense": _commit_expense,
+    "receivable": _commit_receivable,
+    "receivable_payment": _commit_receivable_payment,
+    "inventory": _commit_inventory,
+    "customer": _commit_customer,
+}
+
+
+async def apply_commit(req: CommitRequest) -> CommitResult:
+    handler = COMMIT_HANDLERS.get(req.intent)
+    if not handler:
+        raise HTTPException(status_code=400, detail="Intent ini tidak bisa disimpan")
+    return await handler(req, float(req.total or 0))
 
 
 @api_router.post("/nlu/commit")
@@ -458,33 +467,38 @@ async def purchase_history():
             if e["created_at"] > g["last_at"]:
                 g["last_at"] = e["created_at"]
 
-    out = []
-    for g in groups.values():
-        prices = sorted(g["prices"], key=lambda p: p["at"])
-        cheapest = min((p["price"] for p in prices), default=None)
-        latest = prices[-1]["price"] if prices else None
-        hint = None
-        if cheapest and latest and latest > cheapest * 1.1:
-            hint = (
-                f"Harga terakhir {rupiah(latest)}, pernah dapat {rupiah(cheapest)}. "
-                f"Coba nego atau bandingkan pemasok."
-            )
-        elif g["times"] >= 3:
-            hint = f"Sudah {g['times']}× beli — minta harga langganan ke pemasok."
-        out.append({
-            "name": g["name"],
-            "times": g["times"],
-            "total_spent": round(g["total_spent"]),
-            "total_qty": round(g["total_qty"], 2),
-            "unit": g["unit"],
-            "avg_unit_price": round(sum(p["price"] for p in prices) / len(prices)) if prices else None,
-            "cheapest_unit_price": cheapest,
-            "latest_unit_price": latest,
-            "last_at": g["last_at"],
-            "hint": hint,
-        })
+    out = [_purchase_row(g) for g in groups.values()]
     out.sort(key=lambda x: x["total_spent"], reverse=True)
     return {"purchases": out}
+
+
+def _purchase_hint(group: dict, cheapest: Optional[float], latest: Optional[float]) -> Optional[str]:
+    if cheapest and latest and latest > cheapest * 1.1:
+        return (
+            f"Harga terakhir {rupiah(latest)}, pernah dapat {rupiah(cheapest)}. "
+            f"Coba nego atau bandingkan pemasok."
+        )
+    if group["times"] >= 3:
+        return f"Sudah {group['times']}× beli — minta harga langganan ke pemasok."
+    return None
+
+
+def _purchase_row(group: dict) -> dict:
+    prices = sorted(group["prices"], key=lambda p: p["at"])
+    cheapest = min((p["price"] for p in prices), default=None)
+    latest = prices[-1]["price"] if prices else None
+    return {
+        "name": group["name"],
+        "times": group["times"],
+        "total_spent": round(group["total_spent"]),
+        "total_qty": round(group["total_qty"], 2),
+        "unit": group["unit"],
+        "avg_unit_price": round(sum(p["price"] for p in prices) / len(prices)) if prices else None,
+        "cheapest_unit_price": cheapest,
+        "latest_unit_price": latest,
+        "last_at": group["last_at"],
+        "hint": _purchase_hint(group, cheapest, latest),
+    }
 
 
 @api_router.get("/brief/audio")
@@ -503,12 +517,15 @@ async def brief_audio(text: str):
     if cached:
         return Response(content=cached["audio"], media_type="audio/mpeg",
                         headers={"Cache-Control": "public, max-age=86400"})
+    audio: Optional[bytes] = None
     try:
         tts = OpenAITextToSpeech(api_key=os.environ["EMERGENT_LLM_KEY"])
         audio = await tts.generate_speech(text=clean, model="tts-1", voice="nova")
     except Exception as e:
         logger.exception("tts failed")
         raise HTTPException(status_code=500, detail=f"Gagal membuat suara: {e}")
+    if not audio:
+        raise HTTPException(status_code=500, detail="Suara kosong dari penyedia TTS")
     await db.tts_cache.insert_one({"key": key, "audio": audio, "created_at": now_iso()})
     return Response(content=audio, media_type="audio/mpeg",
                     headers={"Cache-Control": "public, max-age=86400"})
@@ -747,8 +764,6 @@ async def weekly_report(period: str = "weekly"):
 
     week_sales = [s for s in sales if start <= d(s) <= today]
     week_expenses = [e for e in expenses if start <= d(e) <= today]
-    revenue = sum(s["total"] for s in week_sales)
-    expense = sum(e["total"] for e in week_expenses)
 
     prev_start = start - timedelta(days=days)
     prev_end = start - timedelta(days=1)
@@ -757,40 +772,90 @@ async def weekly_report(period: str = "weekly"):
     prev_revenue = sum(s["total"] for s in prev_sales)
     prev_expense = sum(e["total"] for e in prev_expenses)
 
-    def delta(now_v, prev_v):
-        if not prev_v:
-            return None
-        return round((now_v - prev_v) / prev_v * 100)
-
-    per_item: dict[str, dict] = {}
-    for s in week_sales:
-        for it in s.get("items", []):
-            row = per_item.setdefault(it["name"], {"name": it["name"], "qty": 0, "revenue": 0})
-            row["qty"] += it.get("qty") or 0
-            row["revenue"] += it.get("subtotal") or (it.get("qty") or 1) * (it.get("unit_price") or 0)
-    top_items = sorted(per_item.values(), key=lambda x: x["revenue"], reverse=True)[:3]
-
     per_day = {}
     for s in week_sales:
         per_day[str(d(s))] = per_day.get(str(d(s)), 0) + s["total"]
     best_day = max(per_day.items(), key=lambda x: x[1]) if per_day else None
     outstanding = sum(r["amount"] - r.get("paid_amount", 0) for r in receivables if r["status"] != "lunas")
 
+    data = _report_body(
+        period, days, today, start, prev_start, prev_end, week_sales, week_expenses,
+        prev_sales, prev_revenue, prev_expense, outstanding, best_day,
+        top_selling_items(week_sales),
+    )
+    try:
+        data["narrative"] = await nlu.generate_weekly(data)
+    except Exception as e:
+        logger.exception("weekly report failed")
+        raise HTTPException(status_code=500, detail=f"Gagal membuat laporan: {e}")
+
+    data["share_text"] = report_share_text(data, data["top_items"], outstanding, period)
+    data["share_link"] = "https://wa.me/?text=" + quote(data["share_text"])
+    return data
+
+
+BULAN_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+
+
+def id_date(dt) -> str:
+    return f"{dt.day} {BULAN_ID[dt.month - 1]}"
+
+
+def pct_delta(now_v: float, prev_v: float) -> Optional[int]:
+    if not prev_v:
+        return None
+    return round((now_v - prev_v) / prev_v * 100)
+
+
+def top_selling_items(sales: List[dict], limit: int = 3) -> List[dict]:
+    per_item: dict[str, dict] = {}
+    for s in sales:
+        for it in s.get("items", []):
+            row = per_item.setdefault(it["name"], {"name": it["name"], "qty": 0, "revenue": 0})
+            row["qty"] += it.get("qty") or 0
+            row["revenue"] += it.get("subtotal") or (it.get("qty") or 1) * (it.get("unit_price") or 0)
+    return sorted(per_item.values(), key=lambda x: x["revenue"], reverse=True)[:limit]
+
+
+def expense_breakdown(expenses: List[dict], total_expense: float) -> List[dict]:
     per_cat: dict[str, float] = {}
-    for e in week_expenses:
-        per_cat[e.get("category") or "lainnya"] = per_cat.get(e.get("category") or "lainnya", 0) + e["total"]
-    breakdown = [
-        {"category": k, "total": v, "pct": round(v / expense * 100) if expense else 0}
+    for e in expenses:
+        cat = e.get("category") or "lainnya"
+        per_cat[cat] = per_cat.get(cat, 0) + e["total"]
+    return [
+        {"category": k, "total": v, "pct": round(v / total_expense * 100) if total_expense else 0}
         for k, v in sorted(per_cat.items(), key=lambda x: x[1], reverse=True)
     ]
+
+
+def report_share_text(data: dict, top_items: List[dict], outstanding: float, period: str) -> str:
+    lines = [
+        f"*Laporan VoiceBiz {'Bulanan' if period == 'monthly' else 'Mingguan'}* ({data['period']})",
+        f"Pemasukan: {rupiah(data['revenue'])}",
+        f"Pengeluaran: {rupiah(data['expense'])}",
+        f"Laba: {rupiah(data['profit'])}",
+        f"Transaksi: {data['transactions']} · Rata-rata/hari: {rupiah(data['avg_per_day'])}",
+    ]
+    cmp_ = data["comparison"]
+    if cmp_["revenue_delta"] is not None:
+        arah = "naik" if cmp_["revenue_delta"] >= 0 else "turun"
+        lines.append(f"Omzet {arah} {abs(cmp_['revenue_delta'])}% dari {cmp_['label']} ({rupiah(cmp_['revenue'])})")
+    if top_items:
+        lines.append("Terlaris: " + ", ".join(f"{t['name']} ({int(t['qty'])})" for t in top_items))
+    if outstanding:
+        lines.append(f"Piutang belum tertagih: {rupiah(outstanding)}")
+    lines += ["", data["narrative"]]
+    return "\n".join(lines)
+
+
+def _report_body(period: str, days: int, today, start, prev_start, prev_end,
+                 week_sales: List[dict], week_expenses: List[dict], prev_sales: List[dict],
+                 prev_revenue: float, prev_expense: float, outstanding: float,
+                 best_day, top_items: List[dict]) -> dict:
+    revenue = sum(s["total"] for s in week_sales)
+    expense = sum(e["total"] for e in week_expenses)
     top_expenses = sorted(week_expenses, key=lambda x: x["total"], reverse=True)[:3]
-
-    bulan = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
-
-    def id_date(dt):
-        return f"{dt.day} {bulan[dt.month - 1]}"
-
-    data = {
+    return {
         "period_type": period,
         "days": days,
         "period": f"{id_date(start)} – {id_date(today)} {today.year}",
@@ -802,7 +867,7 @@ async def weekly_report(period: str = "weekly"):
         "top_items": top_items,
         "best_day": {"date": best_day[0], "revenue": best_day[1]} if best_day else None,
         "outstanding_receivables": outstanding,
-        "expense_breakdown": breakdown,
+        "expense_breakdown": expense_breakdown(week_expenses, expense),
         "comparison": {
             "label": "7 hari sebelumnya" if days == 7 else "30 hari sebelumnya",
             "period": f"{id_date(prev_start)} – {id_date(prev_end)}",
@@ -810,38 +875,13 @@ async def weekly_report(period: str = "weekly"):
             "expense": prev_expense,
             "profit": prev_revenue - prev_expense,
             "transactions": len(prev_sales),
-            "revenue_delta": delta(revenue, prev_revenue),
-            "expense_delta": delta(expense, prev_expense),
-            "profit_delta": delta(revenue - expense, prev_revenue - prev_expense),
+            "revenue_delta": pct_delta(revenue, prev_revenue),
+            "expense_delta": pct_delta(expense, prev_expense),
+            "profit_delta": pct_delta(revenue - expense, prev_revenue - prev_expense),
         },
-        "top_expenses": [{"title": e["title"], "total": e["total"], "category": e.get("category")} for e in top_expenses],
+        "top_expenses": [{"title": e["title"], "total": e["total"], "category": e.get("category")}
+                         for e in top_expenses],
     }
-    try:
-        data["narrative"] = await nlu.generate_weekly(data)
-    except Exception as e:
-        logger.exception("weekly report failed")
-        raise HTTPException(status_code=500, detail=f"Gagal membuat laporan: {e}")
-
-    lines = [
-        f"*Laporan VoiceBiz {'Bulanan' if period == 'monthly' else 'Mingguan'}* ({data['period']})",
-        f"Pemasukan: {rupiah(revenue)}",
-        f"Pengeluaran: {rupiah(expense)}",
-        f"Laba: {rupiah(data['profit'])}",
-        f"Transaksi: {len(week_sales)} · Rata-rata/hari: {rupiah(data['avg_per_day'])}",
-    ]
-    cmp_ = data["comparison"]
-    if cmp_["revenue_delta"] is not None:
-        arah = "naik" if cmp_["revenue_delta"] >= 0 else "turun"
-        lines.append(f"Omzet {arah} {abs(cmp_['revenue_delta'])}% dari {cmp_['label']} ({rupiah(cmp_['revenue'])})")
-    if top_items:
-        lines.append("Terlaris: " + ", ".join(f"{t['name']} ({int(t['qty'])})" for t in top_items))
-    if outstanding:
-        lines.append(f"Piutang belum tertagih: {rupiah(outstanding)}")
-    lines.append("")
-    lines.append(data["narrative"])
-    data["share_text"] = "\n".join(lines)
-    data["share_link"] = "https://wa.me/?text=" + quote(data["share_text"])
-    return data
 
 
 # ---------- Business data ----------
@@ -883,6 +923,77 @@ async def business_context() -> dict:
     }
 
 
+def _target_insight(rev_today: float, daily_target: float, target_remaining: float) -> dict:
+    hour_wib = (datetime.now(timezone.utc) + timedelta(hours=7)).hour
+    if target_remaining > 0:
+        return {
+            "type": "info", "icon": "target",
+            "title": f"Sisa {rupiah(target_remaining)} untuk capai target hari ini",
+            "body": f"Target {rupiah(daily_target)} · sudah {round(rev_today / daily_target * 100) if daily_target else 0}% tercapai.",
+            "action": (
+                "Masih ada waktu — tawarkan paket hemat ke pelanggan langganan lewat WhatsApp."
+                if hour_wib < 16
+                else "Sisa jam ramai malam: dorong menu terlaris dan bundling minuman."
+            ),
+        }
+    return {
+        "type": "good", "icon": "target",
+        "title": "Target harian tercapai 🎉",
+        "body": f"Omzet {rupiah(rev_today)} dari target {rupiah(daily_target)}.",
+        "action": "Naikkan target besok sedikit agar usaha terus tumbuh.",
+    }
+
+
+def _trend_insight(rev_today: float, rev_yesterday: float) -> Optional[dict]:
+    if rev_yesterday and rev_today < rev_yesterday * 0.7:
+        drop = round((1 - rev_today / rev_yesterday) * 100)
+        return {
+            "type": "warning", "icon": "trending-down",
+            "title": f"Penjualan turun {drop}% dari kemarin",
+            "body": f"Hari ini {rupiah(rev_today)} vs kemarin {rupiah(rev_yesterday)}.",
+            "action": "Broadcast promo di WhatsApp Status sore ini untuk menarik pembeli.",
+        }
+    if rev_yesterday and rev_today > rev_yesterday:
+        return {
+            "type": "good", "icon": "trending-up",
+            "title": "Penjualan naik dari kemarin",
+            "body": f"Hari ini {rupiah(rev_today)} vs kemarin {rupiah(rev_yesterday)}.",
+            "action": "Siapkan stok bahan favorit agar tidak kehabisan besok.",
+        }
+    return None
+
+
+def build_insights(rev_today: float, rev_yesterday: float, daily_target: float, target_remaining: float,
+                   outstanding_list: List[dict], low_stock: List[dict], inactive: List[dict]) -> List[dict]:
+    insights = [_target_insight(rev_today, daily_target, target_remaining)]
+    trend = _trend_insight(rev_today, rev_yesterday)
+    if trend:
+        insights.append(trend)
+    if outstanding_list:
+        top = max(outstanding_list, key=lambda x: x["remaining"])
+        insights.append({
+            "type": "warning", "icon": "hand-coins",
+            "title": f"Piutang belum tertagih {rupiah(sum(r['remaining'] for r in outstanding_list))}",
+            "body": f"Terbesar: {top['customer_name']} {rupiah(top['remaining'])}.",
+            "action": f"Kirim pengingat sopan ke {top['customer_name']} hari ini.",
+        })
+    if low_stock:
+        insights.append({
+            "type": "danger", "icon": "package-x",
+            "title": f"{len(low_stock)} bahan hampir habis",
+            "body": ", ".join(f"{i['name']} (sisa {int(i['qty'])} {i['unit']})" for i in low_stock[:3]),
+            "action": "Belanja bahan ini sebelum jam sibuk sore.",
+        })
+    if inactive:
+        insights.append({
+            "type": "info", "icon": "user-round-x",
+            "title": f"{len(inactive)} pelanggan lama tidak kembali",
+            "body": ", ".join(c["name"] for c in inactive[:3]),
+            "action": "Tawarkan diskon 10% lewat chat pribadi untuk mengaktifkan mereka.",
+        })
+    return insights
+
+
 @api_router.get("/dashboard")
 async def dashboard():
     today = datetime.now(timezone.utc).date()
@@ -919,67 +1030,11 @@ async def dashboard():
         if (datetime.now(timezone.utc) - datetime.fromisoformat(c["last_active"])).days >= 14
     ]
 
-    insights = []
     settings = await get_settings_doc()
     daily_target = float(settings.get("daily_target", 300000))
     target_remaining = max(0, daily_target - rev_today)
-    hour_wib = (datetime.now(timezone.utc) + timedelta(hours=7)).hour
-    if target_remaining > 0:
-        insights.append({
-            "type": "info", "icon": "target",
-            "title": f"Sisa {rupiah(target_remaining)} untuk capai target hari ini",
-            "body": f"Target {rupiah(daily_target)} · sudah {round(rev_today / daily_target * 100) if daily_target else 0}% tercapai.",
-            "action": (
-                "Masih ada waktu — tawarkan paket hemat ke pelanggan langganan lewat WhatsApp."
-                if hour_wib < 16
-                else "Sisa jam ramai malam: dorong menu terlaris dan bundling minuman."
-            ),
-        })
-    else:
-        insights.append({
-            "type": "good", "icon": "target",
-            "title": "Target harian tercapai 🎉",
-            "body": f"Omzet {rupiah(rev_today)} dari target {rupiah(daily_target)}.",
-            "action": "Naikkan target besok sedikit agar usaha terus tumbuh.",
-        })
-    if rev_yesterday and rev_today < rev_yesterday * 0.7:
-        drop = round((1 - rev_today / rev_yesterday) * 100)
-        insights.append({
-            "type": "warning", "icon": "trending-down",
-            "title": f"Penjualan turun {drop}% dari kemarin",
-            "body": f"Hari ini {rupiah(rev_today)} vs kemarin {rupiah(rev_yesterday)}.",
-            "action": "Broadcast promo di WhatsApp Status sore ini untuk menarik pembeli.",
-        })
-    elif rev_today > rev_yesterday and rev_yesterday:
-        insights.append({
-            "type": "good", "icon": "trending-up",
-            "title": "Penjualan naik dari kemarin",
-            "body": f"Hari ini {rupiah(rev_today)} vs kemarin {rupiah(rev_yesterday)}.",
-            "action": "Siapkan stok bahan favorit agar tidak kehabisan besok.",
-        })
-    if outstanding_list:
-        top = max(outstanding_list, key=lambda x: x["remaining"])
-        insights.append({
-            "type": "warning", "icon": "hand-coins",
-            "title": f"Piutang belum tertagih {rupiah(outstanding)}",
-            "body": f"Terbesar: {top['customer_name']} {rupiah(top['remaining'])}.",
-            "action": f"Kirim pengingat sopan ke {top['customer_name']} hari ini.",
-        })
-    if low_stock:
-        names = ", ".join(f"{i['name']} (sisa {int(i['qty'])} {i['unit']})" for i in low_stock[:3])
-        insights.append({
-            "type": "danger", "icon": "package-x",
-            "title": f"{len(low_stock)} bahan hampir habis",
-            "body": names,
-            "action": "Belanja bahan ini sebelum jam sibuk sore.",
-        })
-    if inactive:
-        insights.append({
-            "type": "info", "icon": "user-round-x",
-            "title": f"{len(inactive)} pelanggan lama tidak kembali",
-            "body": ", ".join(c["name"] for c in inactive[:3]),
-            "action": "Tawarkan diskon 10% lewat chat pribadi untuk mengaktifkan mereka.",
-        })
+    insights = build_insights(rev_today, rev_yesterday, daily_target, target_remaining,
+                              outstanding_list, low_stock, inactive)
 
     return {
         "date": str(today),
@@ -1029,9 +1084,10 @@ async def memory():
 
 @api_router.post("/demo/reset")
 async def reset_demo():
-    for coll in ["sales", "expenses", "customers", "receivables", "inventory", "activities", "history"]:
-        await db[coll].delete_many({})
-    await ensure_seed()
+    async with _reset_lock:
+        for coll in ["sales", "expenses", "customers", "receivables", "inventory", "activities", "history"]:
+            await db[coll].delete_many({})
+        await ensure_seed()
     return {"ok": True, "message": "Data demo dimuat ulang"}
 
 
